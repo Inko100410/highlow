@@ -11,10 +11,10 @@ from datetime import datetime, timedelta
 import threading
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "ТОКЕН_БОТА_СЮДА"
+TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
 
 # Админы и модераторы (ты и подруга)
-ADMIN_IDS = [6656110482, 123456789]  # ВСТАВЬ СВОЙ ID ВМЕСТО 123456789!
+ADMIN_IDS = [6656110482, 8525294722]  # ВСТАВЬ СВОЙ ID ВМЕСТО 123456789!
 
 # ========== КРАСИВЫЕ ПРИНТЫ ==========
 class Colors:
