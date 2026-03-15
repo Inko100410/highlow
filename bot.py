@@ -174,11 +174,12 @@ def is_banned(user_id):
     return str(user_id) in data["banned_users"]
 
 def is_admin(user_id):
-    return str(user_id) in data.get("admins", [])
+    user_id_str = str(user_id)
+    # Проверяем и мастер-админов, и обычных админов
+    return user_id_str in MASTER_ADMINS or user_id_str in data.get("admins", [])
 
 def is_master_admin(user_id):
     return str(user_id) in MASTER_ADMINS
-
 # ========== РАССЫЛКА ПОСТОВ ==========
 
 def send_post_to_users(post, admin_id):
