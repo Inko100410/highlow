@@ -1215,13 +1215,6 @@ if __name__ == "__main__":
         except Exception as e:
             print_log("ERROR", f"Критическая ошибка: {e}")
             print_log("INFO", "Перезапуск через 10 секунд...")
-            time.sleep(10)ist.append({
-                "id": uid,
-                "name": u.get("username", "NoName"),
-                "rating": u.get("rating", 0),
-                "luck": u.get("luck", 0),
-                "posts": u.get("total_posts", 0)
-            })
     
     return sorted(users_list, key=lambda x: x["rating"], reverse=True)[:10]
 
