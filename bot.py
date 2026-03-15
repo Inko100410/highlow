@@ -1,4 +1,4 @@
-# main.py — LowHugh v2.0 (VIP, ВЕРИФ, УДАЛЕНИЕ, АДМИНКА)
+# main.py — LowHugh v2.1 (ИСПРАВЛЕНО)
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -57,16 +57,17 @@ def load_data():
         "posts": [],
         "banned_users": [],
         "admins": MASTER_ADMINS.copy(),
-        "vip_users": [],           # 👑 VIP пользователи
-        "verified_users": [],       # ✅ Верифицированные пользователи
-        "post_history": {},         # {post_id: {user_id: message_id, ...}} для удаления
+        "vip_users": [],
+        "verified_users": [],
+        "post_history": {},
+        "post_contents": {},  # Сохраняем текст поста для жалоб
         "stats": {
             "total_attempts": 0,
             "total_wins": 0,
             "total_posts_sent": 0
         },
-        "post_reactions": {},       # {post_id: {"likes": [user_ids], "dislikes": [user_ids], "complaints": [user_ids]}}
-        "global_reactions": {}       # {user_id: {"total_likes": 0, "total_dislikes": 0}}
+        "post_reactions": {},
+        "global_reactions": {}
     }
 
 def save_data(data):
@@ -91,8 +92,8 @@ def get_user(user_id):
             "fail_counter": 0,
             "incoming_chance": 50.0,
             "last_casino": None,
-            "last_post_time": None,        # для расчета КД
-            "posts_count": 0,               # количество отправленных постов
+            "last_post_time": None,
+            "posts_count": 0,
             "last_convert": None,
             "referrals": [],
             "referrer": None,
@@ -109,7 +110,6 @@ def get_user(user_id):
     return data["users"][user_id]
 
 def get_user_display_name(user_id):
-    """Возвращает имя пользователя для отображения"""
     user_id = str(user_id)
     user = data["users"].get(user_id)
     if not user:
@@ -131,7 +131,6 @@ def get_user_display_name(user_id):
         return f"User_{user_id[-4:]}"
 
 def get_user_status_emoji(user_id):
-    """Возвращает эмодзи статуса пользователя"""
     user_id_str = str(user_id)
     if user_id_str in data.get("vip_users", []):
         return "👑"
@@ -141,7 +140,6 @@ def get_user_status_emoji(user_id):
         return "📝"
 
 def get_max_referrals(user_id):
-    """Максимальное количество рефералов в зависимости от статуса"""
     user_id_str = str(user_id)
     if user_id_str in data.get("vip_users", []):
         return 50
@@ -151,10 +149,8 @@ def get_max_referrals(user_id):
         return 10
 
 def get_post_cooldown(user_id):
-    """Возвращает кулдаун на пост в часах в зависимости от статуса и количества постов"""
     user_id_str = str(user_id)
     
-    # VIP - всегда 2 часа
     if user_id_str in data.get("vip_users", []):
         return 2
     
@@ -164,7 +160,6 @@ def get_post_cooldown(user_id):
     
     posts_count = user.get("posts_count", 0)
     
-    # Расчет КД по таблице
     if posts_count >= 37:
         return 4
     elif posts_count >= 22:
@@ -177,7 +172,6 @@ def get_post_cooldown(user_id):
         return 8
 
 def check_post_cooldown(user):
-    """Проверяет, можно ли отправить пост"""
     if not user["last_post_time"]:
         return True, 0
     
@@ -191,7 +185,6 @@ def check_post_cooldown(user):
     return False, (next_time - now).total_seconds()
 
 def get_max_post_length(user_id):
-    """Максимальная длина поста"""
     user_id_str = str(user_id)
     if user_id_str in data.get("vip_users", []):
         return 500
@@ -267,7 +260,6 @@ def check_casino_cooldown(user):
 # ========== РАССЫЛКА ПОСТОВ С КНОПКАМИ ==========
 
 def send_post_to_users(post, admin_id, force_all=False):
-    """Умная рассылка: 1% гарантированно + остальные по шансу (или всем если force_all)"""
     from_user_id = post["user_id"]
     author = get_user(from_user_id)
     
@@ -292,7 +284,6 @@ def send_post_to_users(post, admin_id, force_all=False):
     print_log("POST", f"Начинаем рассылку поста от {get_user_display_name(from_user_id)}. Всего юзеров: {total_users}")
     
     if force_all:
-        # Интерпол-режим - шлем всем
         guaranteed_count = total_users
         chance_recipients = []
         print_log("POST", f"ИНТЕРПОЛ-РЕЖИМ: рассылка всем {total_users} пользователям")
@@ -308,7 +299,13 @@ def send_post_to_users(post, admin_id, force_all=False):
     sent_count = 0
     post_id = post["id"]
     
-    # Инициализируем реакции для поста
+    # Сохраняем содержимое поста для жалоб
+    data["post_contents"][str(post_id)] = {
+        "text": post['text'],
+        "author_id": from_user_id,
+        "author_name": get_user_display_name(from_user_id)
+    }
+    
     if str(post_id) not in data["post_reactions"]:
         data["post_reactions"][str(post_id)] = {
             "likes": [],
@@ -316,7 +313,6 @@ def send_post_to_users(post, admin_id, force_all=False):
             "complaints": []
         }
     
-    # Инициализируем историю отправки для удаления
     if str(post_id) not in data["post_history"]:
         data["post_history"][str(post_id)] = {}
     
@@ -341,10 +337,7 @@ def send_post_to_users(post, admin_id, force_all=False):
             )
             sent_count += 1
             author["rating"] = min(95.0, author["rating"] + 0.1)
-            
-            # Сохраняем message_id для возможности удаления
             data["post_history"][str(post_id)][str(uid)] = sent_msg.message_id
-            
             print_log("SUCCESS", f"Пост доставлен {uid} (гарантия)")
         except Exception as e:
             print_log("ERROR", f"Ошибка отправки {uid}: {e}")
@@ -352,7 +345,7 @@ def send_post_to_users(post, admin_id, force_all=False):
     chance_hits = 0
     for uid, user_data in chance_recipients:
         if force_all:
-            final_chance = 100  # в интерпол-режиме доставляем всем
+            final_chance = 100
         else:
             final_chance = (
                 user_data["incoming_chance"] + 
@@ -381,10 +374,7 @@ def send_post_to_users(post, admin_id, force_all=False):
                 sent_count += 1
                 chance_hits += 1
                 author["rating"] = min(95.0, author["rating"] + 0.1)
-                
-                # Сохраняем message_id для возможности удаления
                 data["post_history"][str(post_id)][str(uid)] = sent_msg.message_id
-                
             except Exception as e:
                 print_log("ERROR", f"Ошибка отправки {uid}: {e}")
     
@@ -411,9 +401,8 @@ def send_post_to_users(post, admin_id, force_all=False):
     return sent_count
 
 def delete_post_globally(post_id):
-    """Удаляет пост у всех пользователей"""
     if str(post_id) not in data["post_history"]:
-        return False
+        return 0
     
     deleted_count = 0
     for uid, msg_id in data["post_history"][str(post_id)].items():
@@ -423,14 +412,14 @@ def delete_post_globally(post_id):
         except:
             pass
     
-    # Очищаем историю
     del data["post_history"][str(post_id)]
+    if str(post_id) in data["post_contents"]:
+        del data["post_contents"][str(post_id)]
     save_data(data)
     
     return deleted_count
 
 def update_post_reactions_buttons(post_id, chat_id, message_id):
-    """Обновляет кнопки с актуальными счетчиками реакций"""
     reactions = data["post_reactions"].get(str(post_id), {"likes": [], "dislikes": [], "complaints": []})
     likes_count = len(reactions["likes"])
     dislikes_count = len(reactions["dislikes"])
@@ -450,7 +439,6 @@ def update_post_reactions_buttons(post_id, chat_id, message_id):
 # ========== ТОП-10 ==========
 
 def get_top_users():
-    """Возвращает топ-10 пользователей по рейтингу"""
     users_list = []
     for uid, u in data["users"].items():
         if uid not in data["banned_users"]:
@@ -492,7 +480,6 @@ def cancel_keyboard():
     return markup
 
 def admin_main_keyboard():
-    """Главное меню админки"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("📝 Посты на модерации", callback_data="admin_posts_list"),
@@ -507,9 +494,8 @@ def admin_main_keyboard():
     return markup
 
 def admin_posts_list_keyboard(posts):
-    """Клавиатура со списком постов"""
     markup = InlineKeyboardMarkup(row_width=1)
-    for i, post in enumerate(posts[:5]):  # показываем первые 5
+    for i, post in enumerate(posts[:5]):
         short_text = post['text'][:30] + "..." if len(post['text']) > 30 else post['text']
         markup.add(
             InlineKeyboardButton(f"{i+1}. {short_text}", callback_data=f"admin_post_{post['id']}")
@@ -518,7 +504,6 @@ def admin_posts_list_keyboard(posts):
     return markup
 
 def admin_post_actions_keyboard(post_id):
-    """Клавиатура действий с постом"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{post_id}"),
@@ -722,13 +707,13 @@ def cmd_help(message):
     help_text = """
 <b>📚 КОМАНДЫ БОТА</b>
 
-/start - Запустить бота и показать главное меню
-/post - Написать пост для рассылки
-/casino - Информация о казино и текущем шансе
-/spin - Сделать крутку в казино (доступно раз в 8 часов)
-/top - Топ-10 игроков по рейтингу
-/convert - Обменять 5% рейтинга на 1% удачи (раз в 24ч)
-/help - Показать этот список команд
+start - Запустить бота и показать главное меню
+post - Написать пост для рассылки
+casino - Информация о казино и текущем шансе
+spin - Сделать крутку в казино (доступно раз в 8 часов)
+top - Топ-10 игроков по рейтингу
+convert - Обменять 5% рейтинга на 1% удачи (раз в 24ч)
+help - Показать этот список команд
 /admin - Панель администратора (только для админов)
     """
     bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
@@ -1143,14 +1128,6 @@ def callback_handler(call):
         
         reactions = data["post_reactions"][str(post_id)]
         
-        # Ищем автора поста
-        author_id = None
-        for pid, history in data["post_history"].items():
-            if pid == str(post_id):
-                # первый ключ в history - это user_id автора (но там все получатели)
-                # нужно отдельно хранить автора, упростим - будем искать в users
-                break
-        
         if user_id_str in reactions["likes"]:
             reactions["likes"].remove(user_id_str)
             bot.answer_callback_query(call.id, "Лайк убран")
@@ -1188,6 +1165,12 @@ def callback_handler(call):
     elif data_cmd.startswith("complaint_"):
         post_id = data_cmd.split("_")[1]
         
+        # Получаем информацию о посте
+        post_info = data["post_contents"].get(str(post_id), {})
+        post_text = post_info.get("text", "Текст не найден")
+        author_name = post_info.get("author_name", "Неизвестно")
+        author_id = post_info.get("author_id", "Неизвестно")
+        
         if str(post_id) not in data["post_reactions"]:
             data["post_reactions"][str(post_id)] = {"likes": [], "dislikes": [], "complaints": []}
         
@@ -1197,13 +1180,28 @@ def callback_handler(call):
             reactions["complaints"].append(user_id_str)
             bot.answer_callback_query(call.id, "Жалоба отправлена администратору")
             
-            # Уведомляем админов о жалобе
+            # Уведомляем админов о жалобе с текстом поста
             for admin_id in data.get("admins", []):
                 if admin_id != user_id_str:
                     try:
+                        complaint_text = f"""
+⚠️ <b>ЖАЛОБА НА ПОСТ</b>
+
+<b>Пост ID:</b> {post_id}
+<b>Автор:</b> {author_name} (ID: {author_id})
+<b>Жалобу отправил:</b> {get_user_display_name(user_id)} (ID: {user_id})
+
+<b>Текст поста:</b>
+{post_text}
+
+<b>Действия:</b>
+• /delpost {post_id} - удалить пост у всех
+• /ban {author_id} - забанить автора
+                        """
                         bot.send_message(
                             int(admin_id),
-                            f"⚠️ Жалоба на пост {post_id} от {get_user_display_name(user_id)}"
+                            complaint_text,
+                            parse_mode="HTML"
                         )
                     except:
                         pass
@@ -1224,7 +1222,17 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"Пост удален у {deleted} пользователей")
         return
     
-    # ===== АДМИН-МЕНЮ =====
+    # ===== АДМИН-МЕНЮ (НЕ УДАЛЯЕМ СООБЩЕНИЯ) =====
+    if data_cmd.startswith("admin_") or data_cmd in ["admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_", "interpol_"]:
+        # Не удаляем админские сообщения
+        pass
+    else:
+        # Удаляем только обычные сообщения
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+    
     if data_cmd == "admin_main":
         if not is_admin(user_id):
             return
@@ -1372,12 +1380,7 @@ def callback_handler(call):
             save_data(data)
             bot.answer_callback_query(call.id, f"Уведомления: {'ВКЛ' if user['admin_notifications'] else 'ВЫКЛ'}")
     
-    try:
-        bot.delete_message(user_id, call.message.message_id)
-    except:
-        pass
-    
-    if data_cmd == "main_menu":
+    elif data_cmd == "main_menu":
         bot.send_message(
             user_id,
             "Главное меню:",
@@ -1520,7 +1523,6 @@ def callback_handler(call):
         )
     
     elif data_cmd == "stats":
-        # Получаем глобальные реакции
         total_likes = 0
         total_dislikes = 0
         for pid, reactions in data["post_reactions"].items():
@@ -1635,11 +1637,9 @@ def receive_post(message):
             "time": datetime.now().isoformat()
         }
         
-        # Обновляем статистику постов для КД
         user["last_post_time"] = datetime.now().isoformat()
         user["posts_count"] = user.get("posts_count", 0) + 1
         
-        # Верифицированные и админы - без модерации
         if is_admin(user_id) or is_verified(user_id):
             sent = send_post_to_users(post, user_id)
             bot.send_message(
@@ -1679,7 +1679,6 @@ def receive_post(message):
         bot.send_message(user_id, "❌ Принимаем только текст без картинок")
 
 def receive_interpol_post(message):
-    """Прием поста для интерпол-рассылки"""
     user_id = message.from_user.id
     
     if not is_admin(user_id):
@@ -1713,7 +1712,7 @@ def auto_save():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHugh v2.0")
+    print("     LowHugh v2.1")
     print("="*50)
     print(f"{Colors.END}")
     
