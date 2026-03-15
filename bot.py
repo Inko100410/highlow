@@ -1107,7 +1107,7 @@ if __name__ == "__main__":
         except Exception as e:
             print_log("ERROR", f"Критическая ошибка: {e}")
             print_log("INFO", "Перезапуск через 10 секунд...")
-            time.sleep(10)))
+            time.sleep(10))
         markup.add(InlineKeyboardButton("🏠 Меню", callback_data="main_menu"))
         bot.send_message(user_id, text, reply_markup=markup)
     
