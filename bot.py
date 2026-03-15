@@ -1614,12 +1614,21 @@ def receive_post(message):
     if not user:
         return
     
+    # ===== ПРОВЕРКА КД (ДОБАВИТЬ ЭТОТ БЛОК) =====
+    can_post, cooldown = check_post_cooldown(user)
+    if not can_post:
+        bot.send_message(
+            user_id, 
+            f"⏳ Подожди еще {format_time(cooldown)} перед следующим постом",
+            reply_markup=main_keyboard()
+        )
+        return
+    # ===========================================
+    
     if message.text and message.text.lower() in ["отмена", "cancel", "/cancel"]:
         bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
         return
-    
-    if message.text:
-        max_len = get_max_post_length(user_id)
+        
         if len(message.text) > max_len:
             bot.send_message(
                 user_id,
