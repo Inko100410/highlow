@@ -1,4 +1,4 @@
-# main.py — LowHugh v2.2 (ИСПРАВЛЕНО)
+# main.py — LowHugh v2.3 (ПОЛНАЯ АДМИНКА)
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -318,6 +318,9 @@ def send_post_to_users(post, admin_id, force_all=False):
     
     author_emoji = get_user_status_emoji(from_user_id)
     
+    # Форматируем текст поста (курсив для цитаты)
+    formatted_text = f"<i>{post['text']}</i>"
+    
     for uid, user_data in guaranteed_recipients:
         try:
             markup = InlineKeyboardMarkup(row_width=3)
@@ -331,7 +334,7 @@ def send_post_to_users(post, admin_id, force_all=False):
             
             sent_msg = bot.send_message(
                 int(uid),
-                f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
+                f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id)}:\n\n{formatted_text}",
                 parse_mode="HTML",
                 reply_markup=markup
             )
@@ -367,7 +370,7 @@ def send_post_to_users(post, admin_id, force_all=False):
                 
                 sent_msg = bot.send_message(
                     int(uid),
-                    f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
+                    f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id)}:\n\n{formatted_text}",
                     parse_mode="HTML",
                     reply_markup=markup
                 )
@@ -484,12 +487,12 @@ def admin_main_keyboard():
     markup.add(
         InlineKeyboardButton("📝 Посты на модерации", callback_data="admin_posts_list"),
         InlineKeyboardButton("📢 Интерпол-рассылка", callback_data="admin_interpol"),
-        InlineKeyboardButton("👑 Управление VIP", callback_data="admin_vip"),
-        InlineKeyboardButton("✅ Управление Вериф", callback_data="admin_verified"),
-        InlineKeyboardButton("👥 Управление админами", callback_data="admin_admins"),
-        InlineKeyboardButton("🚫 Управление банами", callback_data="admin_bans"),
-        InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
-        InlineKeyboardButton("🔔 Настройки уведомлений", callback_data="toggle_notify")
+        InlineKeyboardButton("👑 Управление VIP", callback_data="admin_vip_list"),
+        InlineKeyboardButton("✅ Управление Вериф", callback_data="admin_verified_list"),
+        InlineKeyboardButton("👥 Управление админами", callback_data="admin_admins_list"),
+        InlineKeyboardButton("🚫 Управление банами", callback_data="admin_bans_list"),
+        InlineKeyboardButton("📊 Статистика бота", callback_data="admin_stats"),
+        InlineKeyboardButton("🔔 Уведомления", callback_data="toggle_notify")
     )
     return markup
 
@@ -512,6 +515,45 @@ def admin_post_actions_keyboard(post_id):
         InlineKeyboardButton("📢 Интерпол", callback_data=f"interpol_{post_id}"),
         InlineKeyboardButton("◀️ К списку", callback_data="admin_posts_list")
     )
+    return markup
+
+def admin_users_list_keyboard(users, action_prefix, back_callback):
+    """Универсальная клавиатура для списка пользователей"""
+    markup = InlineKeyboardMarkup(row_width=1)
+    for i, uid in enumerate(users[:10]):
+        name = get_user_display_name(uid)
+        markup.add(
+            InlineKeyboardButton(f"{i+1}. {name}", callback_data=f"{action_prefix}_{uid}")
+        )
+    markup.add(InlineKeyboardButton("◀️ Назад", callback_data=back_callback))
+    return markup
+
+def admin_user_actions_keyboard(uid, user_type):
+    """Клавиатура действий с пользователем"""
+    markup = InlineKeyboardMarkup(row_width=2)
+    
+    if user_type == "vip":
+        markup.add(
+            InlineKeyboardButton("❌ Снять VIP", callback_data=f"remove_vip_{uid}"),
+            InlineKeyboardButton("◀️ Назад", callback_data="admin_vip_list")
+        )
+    elif user_type == "verified":
+        markup.add(
+            InlineKeyboardButton("❌ Снять верификацию", callback_data=f"remove_verified_{uid}"),
+            InlineKeyboardButton("◀️ Назад", callback_data="admin_verified_list")
+        )
+    elif user_type == "admin":
+        if uid not in [str(a) for a in MASTER_ADMINS]:
+            markup.add(
+                InlineKeyboardButton("❌ Снять админа", callback_data=f"remove_admin_{uid}"),
+                InlineKeyboardButton("◀️ Назад", callback_data="admin_admins_list")
+            )
+    elif user_type == "banned":
+        markup.add(
+            InlineKeyboardButton("✅ Разбанить", callback_data=f"unban_{uid}"),
+            InlineKeyboardButton("◀️ Назад", callback_data="admin_bans_list")
+        )
+    
     return markup
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
@@ -710,12 +752,12 @@ def cmd_help(message):
     help_text = """
 <b>📚 КОМАНДЫ БОТА</b>
 
-start - Запустить бота и показать главное меню
 post - Написать пост для рассылки
 casino - Информация о казино и текущем шансе
 spin - Сделать крутку в казино (доступно раз в 8 часов)
 top - Топ-10 игроков по рейтингу
 convert - Обменять 5% рейтинга на 1% удачи (раз в 24ч)
+start - Запустить бота и показать главное меню
 help - Показать этот список команд
 /admin - Панель администратора (только для админов)
     """
@@ -1223,17 +1265,17 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"Пост удален у {deleted} пользователей")
         return
     
-    # ===== АДМИН-МЕНЮ (НЕ УДАЛЯЕМ СООБЩЕНИЯ) =====
-    if data_cmd.startswith("admin_") or data_cmd in ["admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_", "interpol_"]:
+    # ===== АДМИН-МЕНЮ =====
+    if data_cmd.startswith("admin_") or data_cmd in ["admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_", "interpol_", "admin_vip_list", "admin_verified_list", "admin_admins_list", "admin_bans_list", "admin_stats"]:
         # Не удаляем админские сообщения
         pass
     else:
-        # Удаляем только обычные сообщения
         try:
             bot.delete_message(user_id, call.message.message_id)
         except:
             pass
     
+    # ===== АДМИН-ПАНЕЛЬ =====
     if data_cmd == "admin_main":
         if not is_admin(user_id):
             return
@@ -1305,6 +1347,18 @@ def callback_handler(call):
                 
                 data["posts"].pop(i)
                 save_data(data)
+                
+                # Показываем следующий пост, если есть
+                if data["posts"]:
+                    next_post = data["posts"][0]
+                    author_name = get_user_display_name(next_post["user_id"])
+                    text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
+                    bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode="HTML",
+                        reply_markup=admin_post_actions_keyboard(next_post['id'])
+                    )
                 break
     
     elif data_cmd.startswith("reject_"):
@@ -1320,8 +1374,21 @@ def callback_handler(call):
                     user_id,
                     call.message.message_id
                 )
+                
                 data["posts"].pop(i)
                 save_data(data)
+                
+                # Показываем следующий пост, если есть
+                if data["posts"]:
+                    next_post = data["posts"][0]
+                    author_name = get_user_display_name(next_post["user_id"])
+                    text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
+                    bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode="HTML",
+                        reply_markup=admin_post_actions_keyboard(next_post['id'])
+                    )
                 break
     
     elif data_cmd.startswith("ban_user_"):
@@ -1375,12 +1442,347 @@ def callback_handler(call):
         )
         bot.register_next_step_handler_by_chat_id(user_id, receive_interpol_post)
     
+    # ===== УПРАВЛЕНИЕ VIP =====
+    elif data_cmd == "admin_vip_list":
+        if not is_admin(user_id):
+            return
+        
+        vip_list = data.get("vip_users", [])
+        if not vip_list:
+            bot.edit_message_text(
+                "👑 Нет VIP пользователей",
+                user_id,
+                call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                )
+            )
+            return
+        
+        text = f"👑 <b>VIP пользователи ({len(vip_list)}):</b>\n\n"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_users_list_keyboard(vip_list, "admin_vip", "admin_main")
+        )
+    
+    elif data_cmd.startswith("admin_vip_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        name = get_user_display_name(target_id)
+        text = f"👑 <b>VIP пользователь</b>\n\nID: {target_id}\nИмя: {name}"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_user_actions_keyboard(target_id, "vip")
+        )
+    
+    # ===== УПРАВЛЕНИЕ ВЕРИФ =====
+    elif data_cmd == "admin_verified_list":
+        if not is_admin(user_id):
+            return
+        
+        verified_list = data.get("verified_users", [])
+        if not verified_list:
+            bot.edit_message_text(
+                "✅ Нет верифицированных пользователей",
+                user_id,
+                call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                )
+            )
+            return
+        
+        text = f"✅ <b>Верифицированные пользователи ({len(verified_list)}):</b>\n\n"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_users_list_keyboard(verified_list, "admin_verified", "admin_main")
+        )
+    
+    elif data_cmd.startswith("admin_verified_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        name = get_user_display_name(target_id)
+        text = f"✅ <b>Верифицированный пользователь</b>\n\nID: {target_id}\nИмя: {name}"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_user_actions_keyboard(target_id, "verified")
+        )
+    
+    # ===== УПРАВЛЕНИЕ АДМИНАМИ =====
+    elif data_cmd == "admin_admins_list":
+        if not is_admin(user_id):
+            return
+        
+        admin_list = data.get("admins", [])
+        text = f"👥 <b>Администраторы ({len(admin_list)}):</b>\n\n"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_users_list_keyboard(admin_list, "admin_admin", "admin_main")
+        )
+    
+    elif data_cmd.startswith("admin_admin_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        name = get_user_display_name(target_id)
+        text = f"👥 <b>Администратор</b>\n\nID: {target_id}\nИмя: {name}"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_user_actions_keyboard(target_id, "admin")
+        )
+    
+    # ===== УПРАВЛЕНИЕ БАНАМИ =====
+    elif data_cmd == "admin_bans_list":
+        if not is_admin(user_id):
+            return
+        
+        banned_list = data.get("banned_users", [])
+        if not banned_list:
+            bot.edit_message_text(
+                "🚫 Нет забаненных пользователей",
+                user_id,
+                call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                )
+            )
+            return
+        
+        text = f"🚫 <b>Забаненные пользователи ({len(banned_list)}):</b>\n\n"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_users_list_keyboard(banned_list, "admin_banned", "admin_main")
+        )
+    
+    elif data_cmd.startswith("admin_banned_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        name = get_user_display_name(target_id)
+        text = f"🚫 <b>Забаненный пользователь</b>\n\nID: {target_id}\nИмя: {name}"
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_user_actions_keyboard(target_id, "banned")
+        )
+    
+    # ===== СТАТИСТИКА =====
+    elif data_cmd == "admin_stats":
+        if not is_admin(user_id):
+            return
+        
+        total_users = len(data["users"])
+        total_banned = len(data["banned_users"])
+        total_admins = len(data.get("admins", []))
+        total_vip = len(data.get("vip_users", []))
+        total_verified = len(data.get("verified_users", []))
+        total_posts = data["stats"]["total_posts_sent"]
+        total_games = data["stats"]["total_attempts"]
+        total_wins = data["stats"]["total_wins"]
+        
+        text = f"""
+📊 <b>СТАТИСТИКА БОТА</b>
+
+👥 Всего пользователей: {total_users}
+🚫 Забанено: {total_banned}
+👑 VIP: {total_vip}
+✅ Верифицировано: {total_verified}
+👥 Админов: {total_admins}
+
+📝 Всего постов: {total_posts}
+🎰 Всего игр: {total_games}
+🏆 Всего побед: {total_wins}
+        """
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+            )
+        )
+    
+    # ===== ДЕЙСТВИЯ С ПОЛЬЗОВАТЕЛЯМИ =====
+    elif data_cmd.startswith("remove_vip_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        if target_id in data.get("vip_users", []):
+            data["vip_users"].remove(target_id)
+            save_data(data)
+            bot.answer_callback_query(call.id, f"VIP статус удален")
+            
+            try:
+                bot.send_message(
+                    int(target_id),
+                    f"❌ Ваш VIP статус был удален администратором"
+                )
+            except:
+                pass
+            
+            # Возвращаемся к списку VIP
+            vip_list = data.get("vip_users", [])
+            if vip_list:
+                text = f"👑 <b>VIP пользователи ({len(vip_list)}):</b>\n\n"
+                bot.edit_message_text(
+                    text,
+                    user_id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=admin_users_list_keyboard(vip_list, "admin_vip", "admin_main")
+                )
+            else:
+                bot.edit_message_text(
+                    "👑 Нет VIP пользователей",
+                    user_id,
+                    call.message.message_id,
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                    )
+                )
+    
+    elif data_cmd.startswith("remove_verified_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        if target_id in data.get("verified_users", []):
+            data["verified_users"].remove(target_id)
+            save_data(data)
+            bot.answer_callback_query(call.id, f"Верификация удалена")
+            
+            try:
+                bot.send_message(
+                    int(target_id),
+                    f"❌ Ваш верифицированный статус был удален администратором"
+                )
+            except:
+                pass
+            
+            verified_list = data.get("verified_users", [])
+            if verified_list:
+                text = f"✅ <b>Верифицированные пользователи ({len(verified_list)}):</b>\n\n"
+                bot.edit_message_text(
+                    text,
+                    user_id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=admin_users_list_keyboard(verified_list, "admin_verified", "admin_main")
+                )
+            else:
+                bot.edit_message_text(
+                    "✅ Нет верифицированных пользователей",
+                    user_id,
+                    call.message.message_id,
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                    )
+                )
+    
+    elif data_cmd.startswith("remove_admin_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[2]
+        if target_id in data.get("admins", []) and target_id not in [str(a) for a in MASTER_ADMINS]:
+            data["admins"].remove(target_id)
+            save_data(data)
+            bot.answer_callback_query(call.id, f"Админ удален")
+            
+            try:
+                bot.send_message(
+                    int(target_id),
+                    f"❌ Ваш статус администратора был удален"
+                )
+            except:
+                pass
+            
+            admin_list = data.get("admins", [])
+            text = f"👥 <b>Администраторы ({len(admin_list)}):</b>\n\n"
+            bot.edit_message_text(
+                text,
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=admin_users_list_keyboard(admin_list, "admin_admin", "admin_main")
+            )
+    
+    elif data_cmd.startswith("unban_"):
+        if not is_admin(user_id):
+            return
+        
+        target_id = data_cmd.split("_")[1]
+        if target_id in data.get("banned_users", []):
+            data["banned_users"].remove(target_id)
+            save_data(data)
+            bot.answer_callback_query(call.id, f"Пользователь разбанен")
+            
+            try:
+                bot.send_message(
+                    int(target_id),
+                    f"✅ Вы были разбанены администратором"
+                )
+            except:
+                pass
+            
+            banned_list = data.get("banned_users", [])
+            if banned_list:
+                text = f"🚫 <b>Забаненные пользователи ({len(banned_list)}):</b>\n\n"
+                bot.edit_message_text(
+                    text,
+                    user_id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=admin_users_list_keyboard(banned_list, "admin_banned", "admin_main")
+                )
+            else:
+                bot.edit_message_text(
+                    "🚫 Нет забаненных пользователей",
+                    user_id,
+                    call.message.message_id,
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
+                    )
+                )
+    
     elif data_cmd == "toggle_notify":
         if is_admin(user_id):
             user["admin_notifications"] = not user.get("admin_notifications", True)
             save_data(data)
             bot.answer_callback_query(call.id, f"Уведомления: {'ВКЛ' if user['admin_notifications'] else 'ВЫКЛ'}")
     
+    # ===== ОБЫЧНОЕ МЕНЮ =====
     elif data_cmd == "main_menu":
         bot.send_message(
             user_id,
@@ -1602,7 +2004,7 @@ def callback_handler(call):
             reply_markup=main_keyboard()
         )
 
-# ========== ПРИЕМ ПОСТОВ (ИСПРАВЛЕНО) ==========
+# ========== ПРИЕМ ПОСТОВ ==========
 
 def receive_post(message):
     user_id = message.from_user.id
@@ -1738,7 +2140,7 @@ def auto_save():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHugh v2.2")
+    print("     LowHugh v2.3")
     print("="*50)
     print(f"{Colors.END}")
     
