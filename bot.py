@@ -1,5 +1,4 @@
-# main.py — Рекламное Казино v4.1
-# Полностью рабочий код без синтаксических ошибок
+# main.py — Рекламное Казино (БЕЗ ПРОКСИ)
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,32 +8,432 @@ import json
 import os
 from datetime import datetime, timedelta
 import threading
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
-# ========== ПРОКСИ ДЛЯ ТЕЛЕГРАМА (ОБХОД БЛОКИРОВОК) ==========
-import telebot.apihelper
+# ========== НАСТРОЙКИ ==========
+TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
 
-# Список бесплатных HTTP/HTTPS прокси (обновлено 15.03.2026)
-FREE_HTTP_PROXIES = [
-    'http://45.87.61.5:3128',
-    'http://185.217.137.229:3128',
-    'http://194.67.200.134:8888',
-    'http://185.224.249.34:8080',
-    'http://45.86.96.49:8080',
-    'http://176.98.228.125:8080',
-    'http://94.23.34.185:3128',
-    'http://51.79.50.28:9300',
-]
+# Главные админы (ты и подруга)
+MASTER_ADMINS = [6656110482, 8525294722]
 
-# Пробуем подключиться через прокси
-print("🔄 Подключаемся к Telegram через прокси...")
-working_proxy = None
+# Создаем бота (БЕЗ ПРОКСИ)
+bot = telebot.TeleBot(TOKEN)
 
-for proxy in FREE_HTTP_PROXIES:
+# ========== КРАСИВЫЕ ПРИНТЫ ==========
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+
+def print_log(level, message):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    if level == "INFO":
+        print(f"{Colors.BLUE}[{timestamp}][INFO]{Colors.END} {message}")
+    elif level == "SUCCESS":
+        print(f"{Colors.GREEN}[{timestamp}][✓]{Colors.END} {message}")
+    elif level == "ERROR":
+        print(f"{Colors.RED}[{timestamp}][✗]{Colors.END} {message}")
+
+# ========== БАЗА ДАННЫХ ==========
+DATA_FILE = "bot_data.json"
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {
+        "users": {},
+        "posts": [],
+        "banned_users": [],
+        "admins": MASTER_ADMINS.copy(),
+        "stats": {"total_attempts": 0, "total_wins": 0, "total_posts_sent": 0}
+    }
+
+def save_data(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+data = load_data()
+
+# ========== РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ==========
+def get_user(user_id):
+    user_id = str(user_id)
+    if user_id in data["banned_users"]:
+        return None
+    if user_id not in data["users"]:
+        data["users"][user_id] = {
+            "rating": 5.0, "luck": 1.0, "fail_counter": 0,
+            "incoming_chance": 50.0, "last_casino": None, "last_convert": None,
+            "referrals": [], "referrer": None, "total_posts": 0,
+            "total_casino_attempts": 0, "total_wins": 0,
+            "username": None, "first_name": None, "admin_notifications": True
+        }
+        save_data(data)
+    return data["users"][user_id]
+
+def get_user_display_name(user_id):
+    user_id = str(user_id)
+    user = data["users"].get(user_id)
+    if not user:
+        return "Неизвестно"
+    if user.get("username"):
+        return user["username"]
+    if user.get("first_name"):
+        return user["first_name"]
     try:
-        test_session = requests.Session()
+        chat = bot.get_chat(int(user_id))
+        return chat.first_name or f"ID:{user_id[-4:]}"
+    except:
+        return f"ID:{user_id[-4:]}"
+
+def is_banned(user_id):
+    return str(user_id) in data["banned_users"]
+
+def is_admin(user_id):
+    return str(user_id) in data.get("admins", [])
+
+def format_time(seconds):
+    return f"{int(seconds//3600)}ч {int((seconds%3600)//60)}м"
+
+def check_casino_cooldown(user):
+    if not user["last_casino"]:
+        return True, 0
+    last = datetime.fromisoformat(user["last_casino"])
+    if datetime.now() >= last + timedelta(hours=8):
+        return True, 0
+    return False, (last + timedelta(hours=8) - datetime.now()).total_seconds()
+
+# ========== РАССЫЛКА ==========
+def send_post_to_users(post, admin_id):
+    from_user_id = post["user_id"]
+    author = get_user(from_user_id)
+    if not author:
+        return 0
+    
+    recipients = [(uid, ud) for uid, ud in data["users"].items() 
+                 if uid != from_user_id and uid not in data["banned_users"]]
+    
+    if not recipients:
+        return 0
+    
+    total = len(recipients)
+    guaranteed = max(1, int(total * 0.01))
+    random.shuffle(recipients)
+    
+    sent = 0
+    for uid, ud in recipients[:guaranteed]:
+        try:
+            bot.send_message(int(uid), f"📢 От {get_user_display_name(from_user_id)}:\n{post['text']}")
+            sent += 1
+            author["rating"] = min(95.0, author["rating"] + 0.1)
+        except:
+            pass
+    
+    for uid, ud in recipients[guaranteed:]:
+        chance = ud["incoming_chance"] + author["rating"]/2 + author["luck"]/10
+        if random.uniform(0, 100) <= min(95, max(5, chance)):
+            try:
+                bot.send_message(int(uid), f"📢 От {get_user_display_name(from_user_id)}:\n{post['text']}")
+                sent += 1
+                author["rating"] = min(95.0, author["rating"] + 0.1)
+            except:
+                pass
+    
+    try:
+        bot.send_message(int(from_user_id), f"✅ Доставлено {sent}/{total}")
+    except:
+        pass
+    
+    data["stats"]["total_posts_sent"] += 1
+    save_data(data)
+    return sent
+
+# ========== ТОП-10 ==========
+def get_top_users():
+    users = []
+    for uid, u in data["users"].items():
+        if uid not in data["banned_users"]:
+            users.append({
+                "name": get_user_display_name(uid),
+                "rating": u["rating"], "luck": u["luck"], "posts": u["total_posts"]
+            })
+    return sorted(users, key=lambda x: x["rating"], reverse=True)[:10]
+
+# ========== КЛАВИАТУРЫ ==========
+def main_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📝 Пост", callback_data="write_post"),
+        InlineKeyboardButton("🎰 Казино", callback_data="casino"),
+        InlineKeyboardButton("👥 Рефералы", callback_data="referrals"),
+        InlineKeyboardButton("📊 Статистика", callback_data="stats"),
+        InlineKeyboardButton("🏆 Топ-10", callback_data="top"),
+        InlineKeyboardButton("🔄 Конверт", callback_data="convert"),
+        InlineKeyboardButton("📻 Настройки", callback_data="settings")
+    )
+    return markup
+
+# ========== КОМАНДЫ ==========
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = message.from_user.id
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 Вы забанены")
+        return
+    
+    user = get_user(user_id)
+    user["first_name"] = message.from_user.first_name
+    user["username"] = message.from_user.username
+    save_data(data)
+    
+    bot.send_message(
+        user_id,
+        f"🎩 РЕКЛАМНОЕ КАЗИНО\n\n📈 Рейтинг: {user['rating']}%\n🍀 Удача: {user['luck']}%",
+        reply_markup=main_keyboard()
+    )
+
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if not is_admin(message.from_user.id):
+        return
+    if not data["posts"]:
+        bot.send_message(message.from_user.id, "📭 Нет постов")
+        return
+    
+    post = data["posts"][0]
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("✅", callback_data=f"approve_{post['id']}"),
+        InlineKeyboardButton("❌", callback_data=f"reject_{post['id']}"),
+        InlineKeyboardButton("🚫", callback_data=f"ban_{post['user_id']}")
+    )
+    bot.send_message(
+        message.from_user.id,
+        f"От: {get_user_display_name(post['user_id'])}\n{post['text']}",
+        reply_markup=markup
+    )
+
+@bot.message_handler(commands=['setrating'])
+def set_rating(message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        args = message.text.split()
+        target = args[1] if len(args) > 2 else str(message.from_user.id)
+        val = float(args[-1])
+        user = get_user(target)
+        if user:
+            user["rating"] = max(5, min(95, val))
+            save_data(data)
+            bot.reply_to(message, "✅ Готово")
+    except:
+        bot.reply_to(message, "❌ /setrating [ID] [знач]")
+
+@bot.message_handler(commands=['setluck'])
+def set_luck(message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        args = message.text.split()
+        target = args[1] if len(args) > 2 else str(message.from_user.id)
+        val = float(args[-1])
+        user = get_user(target)
+        if user:
+            user["luck"] = max(1, min(50, val))
+            save_data(data)
+            bot.reply_to(message, "✅ Готово")
+    except:
+        bot.reply_to(message, "❌ /setluck [ID] [знач]")
+
+# ========== КОЛЛБЭКИ ==========
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.from_user.id
+    if is_banned(user_id):
+        bot.answer_callback_query(call.id, "Вы забанены")
+        return
+    
+    user = get_user(user_id)
+    if not user:
+        return
+    
+    try:
+        bot.delete_message(user_id, call.message.message_id)
+    except:
+        pass
+    
+    if call.data == "main_menu":
+        bot.send_message(user_id, "Меню:", reply_markup=main_keyboard())
+    
+    elif call.data == "casino":
+        ok, cd = check_casino_cooldown(user)
+        text = f"🎰 Шанс: {user['luck']}%\n"
+        text += "✅ Можно" if ok else f"⏳ {format_time(cd)}"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🎲 Дернуть", callback_data="spin"))
+        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="main_menu"))
+        bot.send_message(user_id, text, reply_markup=markup)
+    
+    elif call.data == "spin":
+        ok, cd = check_casino_cooldown(user)
+        if not ok:
+            bot.answer_callback_query(call.id, f"Жди {format_time(cd)}")
+            return
+        
+        old = user["rating"]
+        user["rating"] = max(5, user["rating"] - 1)
+        
+        if random.uniform(0, 100) <= user["luck"]:
+            user["rating"] = min(95, user["rating"] + 10)
+            user["fail_counter"] = 0
+            data["stats"]["total_wins"] += 1
+            text = f"🎉 ПОБЕДА! +10%\n{old}% → {user['rating']}%"
+        else:
+            user["fail_counter"] += 1
+            inc = user["fail_counter"] * 0.01
+            user["luck"] = min(50, user["luck"] + inc)
+            text = f"😢 Проигрыш\nУдача +{inc}% → {user['luck']}%"
+        
+        user["last_casino"] = datetime.now().isoformat()
+        user["total_casino_attempts"] += 1
+        data["stats"]["total_attempts"] += 1
+        save_data(data)
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🎰 Еще", callback_data="casino"))
+        markup.add(InlineKeyboardButton("🏠 Меню", callback_data="main_menu"))
+        bot.send_message(user_id, text, reply_markup=markup)
+    
+    elif call.data == "write_post":
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+        msg = bot.send_message(user_id, "📝 Текст поста:", reply_markup=markup)
+        bot.register_next_step_handler(msg, receive_post)
+    
+    elif call.data == "cancel":
+        bot.clear_step_handler_by_chat_id(user_id)
+        bot.send_message(user_id, "❌ Отменено", reply_markup=main_keyboard())
+    
+    elif call.data == "stats":
+        text = f"📊 Твоя статистика\n📈 Рейтинг: {user['rating']}%\n🍀 Удача: {user['luck']}%\n📻 Прием: {user['incoming_chance']}%\n📝 Постов: {user['total_posts']}\n🎰 Игр: {user['total_casino_attempts']}\n🏆 Побед: {user['total_wins']}\n👥 Рефералов: {len(user['referrals'])}"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="main_menu"))
+        bot.send_message(user_id, text, reply_markup=markup)
+    
+    elif call.data == "top":
+        top = get_top_users()
+        text = "🏆 ТОП-10\n\n"
+        for i, u in enumerate(top, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
+            text += f"{medal} {i}. {u['name']} — {u['rating']}%\n"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="main_menu"))
+        bot.send_message(user_id, text, reply_markup=markup)
+    
+    elif call.data == "convert":
+        if user.get("last_convert") and datetime.now().date() == datetime.fromisoformat(user["last_convert"]).date():
+            bot.answer_callback_query(call.id, "Уже сегодня")
+            return
+        if user["rating"] < 5.1:
+            bot.answer_callback_query(call.id, "Мало рейтинга")
+            return
+        
+        user["rating"] -= 5
+        user["luck"] = min(50, user["luck"] + 1)
+        user["last_convert"] = datetime.now().isoformat()
+        save_data(data)
+        bot.send_message(user_id, f"✅ Конвертация\nРейтинг: {user['rating']}%\nУдача: {user['luck']}%", reply_markup=main_keyboard())
+    
+    elif call.data.startswith("approve_"):
+        if not is_admin(user_id):
+            return
+        pid = call.data.split("_")[1]
+        for i, p in enumerate(data["posts"]):
+            if str(p["id"]) == pid:
+                send_post_to_users(p, user_id)
+                data["posts"].pop(i)
+                save_data(data)
+                bot.send_message(user_id, "✅ Одобрено")
+                break
+    
+    elif call.data.startswith("reject_"):
+        if not is_admin(user_id):
+            return
+        pid = call.data.split("_")[1]
+        for i, p in enumerate(data["posts"]):
+            if str(p["id"]) == pid:
+                data["posts"].pop(i)
+                save_data(data)
+                bot.send_message(user_id, "❌ Отклонено")
+                break
+    
+    elif call.data.startswith("ban_"):
+        if not is_admin(user_id):
+            return
+        bid = call.data.split("_")[1]
+        if bid not in data["banned_users"]:
+            data["banned_users"].append(bid)
+            save_data(data)
+            bot.send_message(user_id, f"🚫 Забанен {bid}")
+
+# ========== ПРИЕМ ПОСТОВ ==========
+def receive_post(message):
+    user_id = message.from_user.id
+    if is_banned(user_id) or not message.text:
+        return
+    
+    user = get_user(user_id)
+    post = {
+        "id": int(time.time() * 1000),
+        "user_id": str(user_id),
+        "text": message.text,
+        "time": datetime.now().isoformat()
+    }
+    
+    if is_admin(user_id):
+        send_post_to_users(post, user_id)
+        bot.send_message(user_id, "✅ Пост разослан", reply_markup=main_keyboard())
+    else:
+        data["posts"].append(post)
+        user["total_posts"] += 1
+        user["luck"] = max(1, user["luck"] - 1)
+        save_data(data)
+        bot.send_message(user_id, "✅ На модерации", reply_markup=main_keyboard())
+        
+        for aid in data["admins"]:
+            if aid != str(user_id):
+                try:
+                    bot.send_message(int(aid), f"🆕 Новый пост от {get_user_display_name(user_id)}\n/admin")
+                except:
+                    pass
+
+# ========== АВТОСОХРАНЕНИЕ ==========
+def auto_save():
+    while True:
+        time.sleep(300)
+        save_data(data)
+        print_log("INFO", "Автосохранение")
+
+# ========== ЗАПУСК ==========
+if __name__ == "__main__":
+    print("="*50)
+    print("     РЕКЛАМНОЕ КАЗИНО")
+    print("="*50)
+    print(f"Админы: {MASTER_ADMINS}")
+    print(f"Юзеров: {len(data['users'])}")
+    print("Запуск...")
+    
+    threading.Thread(target=auto_save, daemon=True).start()
+    
+    while True:
+        try:
+            bot.infinity_polling()
+        except Exception as e:
+            print(f"Ошибка: {e}, перезапуск...")
+            time.sleep(5)        test_session = requests.Session()
         test_session.proxies = {'http': proxy, 'https': proxy}
         test_session.timeout = 3
         r = test_session.get('https://api.telegram.org', timeout=5)
