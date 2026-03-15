@@ -1,4 +1,4 @@
-# main.py — LowHugh v2.3 (ПОЛНАЯ АДМИНКА)
+# main.py — LowHigh v2.4 (ПОЛНОСТЬЮ ИСПРАВЛЕНО)
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -216,7 +216,7 @@ def is_verified(user_id):
 # ========== ПРИВЕТСТВИЕ ==========
 
 WELCOME_TEXT = """
-🎩 <b>LowHugh</b> 🎰
+🎩 <b>LowHigh</b> 🎰
 
 <b>Что это?</b>
 Бесплатный бот для рассылки некоммерческой рекламы проектов и каналов/групп
@@ -299,7 +299,6 @@ def send_post_to_users(post, admin_id, force_all=False):
     sent_count = 0
     post_id = post["id"]
     
-    # Сохраняем содержимое поста для жалоб
     data["post_contents"][str(post_id)] = {
         "text": post['text'],
         "author_id": from_user_id,
@@ -317,8 +316,6 @@ def send_post_to_users(post, admin_id, force_all=False):
         data["post_history"][str(post_id)] = {}
     
     author_emoji = get_user_status_emoji(from_user_id)
-    
-    # Форматируем текст поста (курсив для цитаты)
     formatted_text = f"<i>{post['text']}</i>"
     
     for uid, user_data in guaranteed_recipients:
@@ -518,7 +515,6 @@ def admin_post_actions_keyboard(post_id):
     return markup
 
 def admin_users_list_keyboard(users, action_prefix, back_callback):
-    """Универсальная клавиатура для списка пользователей"""
     markup = InlineKeyboardMarkup(row_width=1)
     for i, uid in enumerate(users[:10]):
         name = get_user_display_name(uid)
@@ -529,7 +525,6 @@ def admin_users_list_keyboard(users, action_prefix, back_callback):
     return markup
 
 def admin_user_actions_keyboard(uid, user_type):
-    """Клавиатура действий с пользователем"""
     markup = InlineKeyboardMarkup(row_width=2)
     
     if user_type == "vip":
@@ -1265,9 +1260,8 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"Пост удален у {deleted} пользователей")
         return
     
-    # ===== АДМИН-МЕНЮ =====
+    # ===== АДМИН-МЕНЮ (НЕ УДАЛЯЕМ СООБЩЕНИЯ) =====
     if data_cmd.startswith("admin_") or data_cmd in ["admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_", "interpol_", "admin_vip_list", "admin_verified_list", "admin_admins_list", "admin_bans_list", "admin_stats"]:
-        # Не удаляем админские сообщения
         pass
     else:
         try:
@@ -1329,68 +1323,105 @@ def callback_handler(call):
                 )
                 break
     
+    # ===== ОДОБРЕНИЕ ПОСТА =====
     elif data_cmd.startswith("approve_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "Не админ")
             return
         
         post_id = data_cmd.split("_")[1]
+        post_found = False
+        post_index = -1
+        post_data = None
+        
         for i, post in enumerate(data["posts"]):
             if str(post["id"]) == post_id:
-                sent = send_post_to_users(post, user_id)
-                
-                bot.edit_message_text(
-                    f"✅ Пост одобрен. Доставлено: {sent} пользователям",
-                    user_id,
-                    call.message.message_id
-                )
-                
-                data["posts"].pop(i)
-                save_data(data)
-                
-                # Показываем следующий пост, если есть
-                if data["posts"]:
-                    next_post = data["posts"][0]
-                    author_name = get_user_display_name(next_post["user_id"])
-                    text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
-                    bot.send_message(
-                        user_id,
-                        text,
-                        parse_mode="HTML",
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
+                post_found = True
+                post_index = i
+                post_data = post
                 break
+        
+        if not post_found:
+            bot.answer_callback_query(call.id, "Пост не найден")
+            return
+        
+        sent = send_post_to_users(post_data, user_id)
+        
+        data["posts"].pop(post_index)
+        save_data(data)
+        
+        if not data["posts"]:
+            bot.edit_message_text(
+                f"✅ Пост одобрен. Доставлено: {sent} пользователям\n\n📭 Больше нет постов на модерации",
+                user_id,
+                call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_main")
+                )
+            )
+        else:
+            next_post = data["posts"][0]
+            author_name = get_user_display_name(next_post["user_id"])
+            text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
+            
+            bot.edit_message_text(
+                f"✅ Пост одобрен. Доставлено: {sent} пользователям\n\n---\n\n{text}",
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=admin_post_actions_keyboard(next_post['id'])
+            )
+        
+        bot.answer_callback_query(call.id, "✅ Пост одобрен")
     
+    # ===== ОТКЛОНЕНИЕ ПОСТА =====
     elif data_cmd.startswith("reject_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "Не админ")
             return
         
         post_id = data_cmd.split("_")[1]
+        post_found = False
+        post_index = -1
+        
         for i, post in enumerate(data["posts"]):
             if str(post["id"]) == post_id:
-                bot.edit_message_text(
-                    f"❌ Пост отклонен",
-                    user_id,
-                    call.message.message_id
-                )
-                
-                data["posts"].pop(i)
-                save_data(data)
-                
-                # Показываем следующий пост, если есть
-                if data["posts"]:
-                    next_post = data["posts"][0]
-                    author_name = get_user_display_name(next_post["user_id"])
-                    text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
-                    bot.send_message(
-                        user_id,
-                        text,
-                        parse_mode="HTML",
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
+                post_found = True
+                post_index = i
                 break
+        
+        if not post_found:
+            bot.answer_callback_query(call.id, "Пост не найден")
+            return
+        
+        data["posts"].pop(post_index)
+        save_data(data)
+        
+        if not data["posts"]:
+            bot.edit_message_text(
+                f"❌ Пост отклонен\n\n📭 Больше нет постов на модерации",
+                user_id,
+                call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_main")
+                )
+            )
+        else:
+            next_post = data["posts"][0]
+            author_name = get_user_display_name(next_post["user_id"])
+            text = f"📝 <b>Пост от {author_name}</b>\n\n{next_post['text']}"
+            
+            bot.edit_message_text(
+                f"❌ Пост отклонен\n\n---\n\n{text}",
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=admin_post_actions_keyboard(next_post['id'])
+            )
+        
+        bot.answer_callback_query(call.id, "❌ Пост отклонен")
     
+    # ===== ОСТАЛЬНЫЕ АДМИН-ФУНКЦИИ =====
     elif data_cmd.startswith("ban_user_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "Не админ")
@@ -1442,7 +1473,6 @@ def callback_handler(call):
         )
         bot.register_next_step_handler_by_chat_id(user_id, receive_interpol_post)
     
-    # ===== УПРАВЛЕНИЕ VIP =====
     elif data_cmd == "admin_vip_list":
         if not is_admin(user_id):
             return
@@ -1483,7 +1513,6 @@ def callback_handler(call):
             reply_markup=admin_user_actions_keyboard(target_id, "vip")
         )
     
-    # ===== УПРАВЛЕНИЕ ВЕРИФ =====
     elif data_cmd == "admin_verified_list":
         if not is_admin(user_id):
             return
@@ -1524,7 +1553,6 @@ def callback_handler(call):
             reply_markup=admin_user_actions_keyboard(target_id, "verified")
         )
     
-    # ===== УПРАВЛЕНИЕ АДМИНАМИ =====
     elif data_cmd == "admin_admins_list":
         if not is_admin(user_id):
             return
@@ -1554,7 +1582,6 @@ def callback_handler(call):
             reply_markup=admin_user_actions_keyboard(target_id, "admin")
         )
     
-    # ===== УПРАВЛЕНИЕ БАНАМИ =====
     elif data_cmd == "admin_bans_list":
         if not is_admin(user_id):
             return
@@ -1595,7 +1622,6 @@ def callback_handler(call):
             reply_markup=admin_user_actions_keyboard(target_id, "banned")
         )
     
-    # ===== СТАТИСТИКА =====
     elif data_cmd == "admin_stats":
         if not is_admin(user_id):
             return
@@ -1632,7 +1658,6 @@ def callback_handler(call):
             )
         )
     
-    # ===== ДЕЙСТВИЯ С ПОЛЬЗОВАТЕЛЯМИ =====
     elif data_cmd.startswith("remove_vip_"):
         if not is_admin(user_id):
             return
@@ -1651,7 +1676,6 @@ def callback_handler(call):
             except:
                 pass
             
-            # Возвращаемся к списку VIP
             vip_list = data.get("vip_users", [])
             if vip_list:
                 text = f"👑 <b>VIP пользователи ({len(vip_list)}):</b>\n\n"
@@ -2017,7 +2041,6 @@ def receive_post(message):
     if not user:
         return
     
-    # Проверка КД перед приемом поста
     can_post, cooldown = check_post_cooldown(user)
     if not can_post:
         bot.send_message(
@@ -2031,7 +2054,6 @@ def receive_post(message):
         bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
         return
     
-    # Проверяем, что прислали текст, а не что-то другое
     if message.content_type != 'text':
         bot.send_message(
             user_id, 
@@ -2140,7 +2162,7 @@ def auto_save():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHugh v2.3")
+    print("     LowHigh v2.4")
     print("="*50)
     print(f"{Colors.END}")
     
