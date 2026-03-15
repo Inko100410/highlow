@@ -1216,8 +1216,7 @@ if __name__ == "__main__":
             print_log("ERROR", f"Критическая ошибка: {e}")
             print_log("INFO", "Перезапуск через 10 секунд...")
     
-    return sorted(users_list, key=lambda x: x["rating"], reverse=True)[:10]
-
+    
 # ========== КЛАВИАТУРЫ ==========
 
 def main_keyboard():
