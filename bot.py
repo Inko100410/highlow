@@ -141,22 +141,23 @@ def is_master_admin(user_id):
 # ========== ПРИВЕТСТВИЕ ==========
 
 WELCOME_TEXT = """
-🎩 <b>РЕКЛАМНОЕ КАЗИНО</b> 🎰
+🎩 <b>LowHugh</b> 🎰
 
 <b>Что это?</b>
-Два в одном: рекламная сеть + лотерея.
+Бесплатный бот для рассылки некоммерческой рекламы проектов и каналов/групп
 
 <b>📝 Реклама:</b>
-Пишешь пост → он уходит в рассылку.
-Шанс доставки зависит от твоего рейтинга и удачи.
+Пишешь пост который далее уходит остальным пользователям бота
+Дойдёт пост или нет зависит от Вашего шанса и рейтинга юзера, к которому пост должен прийти
 
-<b>🎰 Казино:</b>
-Крутишь ручку → шанс выиграть +10% к рейтингу!
+<b>🎰 Бонус-Казино:</b>
+Делаешь крутку и если победил - бонус на +10% успеха доставки поста
 Проиграл? Шанс растет: 0.01% → 0.02% → 0.03%...
 Каждая попытка = -1% рейтинга.
+Попытка раз в 8 часов
 
 <b>🔄 Конвертация (раз в 24ч):</b>
-5% рейтинга → 1% удачи
+Меняешь 5% рейтинга на 1% удачи в крутке
 
 <b>👥 Рефералы:</b>
 Друг = +1% к удаче навсегда (макс 10 друзей)
@@ -240,7 +241,7 @@ def send_post_to_users(post, admin_id):
             
             bot.send_message(
                 int(uid),
-                f"📢 <b>Рекламный пост</b> от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
+                f"📢 <b>Пост</b> от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
                 parse_mode="HTML",
                 reply_markup=markup
             )
@@ -272,7 +273,7 @@ def send_post_to_users(post, admin_id):
                 
                 bot.send_message(
                     int(uid),
-                    f"📢 <b>Рекламный пост</b> от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
+                    f"📢 <b>Пост</b> от {get_user_display_name(from_user_id)}:\n\n{post['text']}",
                     parse_mode="HTML",
                     reply_markup=markup
                 )
@@ -349,7 +350,7 @@ def main_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     buttons = [
         InlineKeyboardButton("📝 Написать пост", callback_data="write_post"),
-        InlineKeyboardButton("🎰 Казино", callback_data="casino"),
+        InlineKeyboardButton("🎰 Бонус", callback_data="casino"),
         InlineKeyboardButton("👥 Рефералы", callback_data="referrals"),
         InlineKeyboardButton("📊 Статистика", callback_data="stats"),
         InlineKeyboardButton("🏆 Топ-10", callback_data="top"),
@@ -360,7 +361,7 @@ def main_keyboard():
 
 def casino_keyboard():
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🎲 Дернуть ручку", callback_data="casino_spin"))
+    markup.add(InlineKeyboardButton("🎲 Сделать крутку", callback_data="casino_spin"))
     markup.add(InlineKeyboardButton("◀️ Назад", callback_data="main_menu"))
     return markup
 
