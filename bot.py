@@ -1853,11 +1853,12 @@ def auto_save():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     РЕКЛАМНОЕ КАЗИНО v3.0")
+    print("     РЕКЛАМНОЕ КАЗИНО v4.0")
     print("="*50)
     print(f"{Colors.END}")
     
-    print_log("INFO", f"Админы: {ADMIN_IDS}")
+    print_log("INFO", f"Мастер-админы: {MASTER_ADMINS}")
+    print_log("INFO", f"Всего админов: {len(data.get('admins', []))}")
     print_log("INFO", f"Всего юзеров: {len(data['users'])}")
     print_log("INFO", f"Постов в очереди: {len(data['posts'])}")
     print_log("INFO", "Бот запущен...")
