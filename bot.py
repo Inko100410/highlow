@@ -1,4 +1,4 @@
-# main.py — LowHugh v2.1 (ИСПРАВЛЕНО)
+# main.py — LowHugh v2.2 (ИСПРАВЛЕНО)
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -60,7 +60,7 @@ def load_data():
         "vip_users": [],
         "verified_users": [],
         "post_history": {},
-        "post_contents": {},  # Сохраняем текст поста для жалоб
+        "post_contents": {},
         "stats": {
             "total_attempts": 0,
             "total_wins": 0,
@@ -602,6 +602,9 @@ def cmd_post(message):
         return
     
     user = get_user(user_id)
+    if not user:
+        return
+    
     can_post, cooldown = check_post_cooldown(user)
     
     if not can_post:
@@ -1165,7 +1168,6 @@ def callback_handler(call):
     elif data_cmd.startswith("complaint_"):
         post_id = data_cmd.split("_")[1]
         
-        # Получаем информацию о посте
         post_info = data["post_contents"].get(str(post_id), {})
         post_text = post_info.get("text", "Текст не найден")
         author_name = post_info.get("author_name", "Неизвестно")
@@ -1180,7 +1182,6 @@ def callback_handler(call):
             reactions["complaints"].append(user_id_str)
             bot.answer_callback_query(call.id, "Жалоба отправлена администратору")
             
-            # Уведомляем админов о жалобе с текстом поста
             for admin_id in data.get("admins", []):
                 if admin_id != user_id_str:
                     try:
@@ -1601,9 +1602,8 @@ def callback_handler(call):
             reply_markup=main_keyboard()
         )
 
-# ========== ПРИЕМ ПОСТОВ ==========
+# ========== ПРИЕМ ПОСТОВ (ИСПРАВЛЕНО) ==========
 
-def receive_post(message):
 def receive_post(message):
     user_id = message.from_user.id
     
@@ -1615,8 +1615,27 @@ def receive_post(message):
     if not user:
         return
     
+    # Проверка КД перед приемом поста
+    can_post, cooldown = check_post_cooldown(user)
+    if not can_post:
+        bot.send_message(
+            user_id, 
+            f"⏳ Подожди еще {format_time(cooldown)} перед следующим постом",
+            reply_markup=main_keyboard()
+        )
+        return
+    
     if message.text and message.text.lower() in ["отмена", "cancel", "/cancel"]:
         bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
+        return
+    
+    # Проверяем, что прислали текст, а не что-то другое
+    if message.content_type != 'text':
+        bot.send_message(
+            user_id, 
+            "❌ Принимаем только текст! Картинки, видео и другие файлы не поддерживаются.",
+            reply_markup=main_keyboard()
+        )
         return
     
     if message.text:
@@ -1676,13 +1695,19 @@ def receive_post(message):
                         )
                     except:
                         pass
-    else:
-        bot.send_message(user_id, "❌ Принимаем только текст без картинок")
 
 def receive_interpol_post(message):
     user_id = message.from_user.id
     
     if not is_admin(user_id):
+        return
+    
+    if message.content_type != 'text':
+        bot.send_message(
+            user_id, 
+            "❌ Принимаем только текст! Картинки не поддерживаются.",
+            reply_markup=admin_main_keyboard()
+        )
         return
     
     if message.text:
@@ -1713,7 +1738,7 @@ def auto_save():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHugh v2.1")
+    print("     LowHugh v2.2")
     print("="*50)
     print(f"{Colors.END}")
     
