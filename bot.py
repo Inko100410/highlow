@@ -1,4 +1,5 @@
-# LowHigh v3.2 — ФИНАЛЬНАЯ ВЕРСИЯ
+# LowHigh v3.3 — ФИНАЛЬНАЯ ВЕРСИЯ (ВСЁ ИСПРАВЛЕНО)
+
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
@@ -105,7 +106,8 @@ def load_data():
             "total_posts_sent": 0
         },
         "post_reactions": {},
-        "global_reactions": {}
+        "global_reactions": {},
+        "hotline_cooldown": {}  # для горячей линии
     }
 
 data = load_data()
@@ -128,6 +130,7 @@ def get_user(user_id):
             "last_post_time": None,
             "posts_count": 0,
             "last_convert": None,
+            "last_hotline": None,  # для КД горячей линии
             "referrals": [],
             "referrer": None,
             "total_posts": 0,
@@ -149,8 +152,8 @@ def get_user(user_id):
             "weekly_likes": 0,
             "quests": {},
             "quest_bonus_ready": False,
-            "my_posts": [],  # список ID постов пользователя
-            "post_history_data": {}  # данные о постах
+            "my_posts": [],
+            "post_history_data": {}
         }
         print_log("SUCCESS", f"Новый пользователь! ID: {user_id}")
         save_data(data)
@@ -232,6 +235,16 @@ def check_post_cooldown(user):
         return True, 0
     return False, (next_time - now).total_seconds()
 
+def check_hotline_cooldown(user):
+    if not user.get("last_hotline"):
+        return True, 0
+    last = datetime.fromisoformat(user["last_hotline"])
+    next_time = last + timedelta(hours=1)
+    now = datetime.now()
+    if now >= next_time:
+        return True, 0
+    return False, (next_time - now).total_seconds()
+
 def get_max_post_length(user_id):
     user_id = str(user_id)
     if is_vip(user_id):
@@ -257,7 +270,6 @@ def format_time(seconds):
     return f"{hours}ч {minutes}м"
 
 def check_and_fix_rating(user_id):
-    """Проверяет и поднимает рейтинг если нужно"""
     user = get_user(user_id)
     if not user:
         return False
@@ -326,6 +338,9 @@ WELCOME_TEXT = """
 <b>👥 Рефералы:</b>
 Друг = +1% к удаче навсегда
 
+<b>📞 Горячая линия:</b>
+Связь с админами (раз в час)
+
 Погнали! 👇
 """
 
@@ -358,19 +373,21 @@ def send_post_to_users(post, admin_id, force_all=False):
     
     if not recipients:
         try:
-            bot.send_message(int(from_user_id), "😢 Нет получателей")
+            bot.send_message(int(from_user_id), "😢 Пока нет других пользователей для рассылки")
         except:
             pass
         return 0
     
     total = len(recipients)
-    print_log("POST", f"Рассылка от {get_user_display_name(from_user_id)}. Всего: {total}")
+    print_log("POST", f"Рассылка от {get_user_display_name(from_user_id)}. Всего юзеров: {total}")
     
     if force_all:
         guaranteed = total
         chance_part = []
+        print_log("POST", f"ИНТЕРПОЛ-РЕЖИМ: рассылка всем {total} пользователям")
     else:
         guaranteed = max(1, int(total * 0.01))
+        print_log("POST", f"Гарантированная доставка: {guaranteed} чел")
         random.shuffle(recipients)
     
     guaranteed_recipients = recipients[:guaranteed]
@@ -394,7 +411,6 @@ def send_post_to_users(post, admin_id, force_all=False):
     author_emoji = get_user_status_emoji(from_user_id)
     formatted_text = f"<i>{post['text']}</i>"
     
-    # Сохраняем в историю автора
     if "my_posts" not in author:
         author["my_posts"] = []
     if post_id not in author["my_posts"]:
@@ -431,6 +447,7 @@ def send_post_to_users(post, admin_id, force_all=False):
             data["post_history"][str(post_id)][str(uid)] = msg.message_id
             author["weekly_activity"] = author.get("weekly_activity", 0) + 5
             author["weekly_posts"] = author.get("weekly_posts", 0) + 1
+            print_log("SUCCESS", f"Пост доставлен {uid} (гарантия)")
         except:
             pass
     
@@ -477,14 +494,20 @@ def send_post_to_users(post, admin_id, force_all=False):
             except:
                 pass
     
-    print_log("POST", f"✅ Пост доставлен {sent}/{total} (гарантия {guaranteed}, шанс {chance_hits})")
+    print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам (гарантия: {guaranteed}, шанс: {chance_hits})")
     
     try:
         bot.send_message(
             int(from_user_id),
             f"✅ <b>Твой пост разослан!</b>\n\n"
-            f"📊 Доставлено: {sent}/{total}\n"
-            f"📈 Рейтинг: {author['rating']:.1f}%",
+            f"📊 <b>Статистика доставки:</b>\n"
+            f"👥 Всего пользователей: {total}\n"
+            f"✅ Доставлено всего: {sent}\n"
+            f"🎯 Гарантированно получили: {guaranteed}\n"
+            f"🎲 По счастливому шансу: {chance_hits}\n\n"
+            f"📈 Твой рейтинг вырос до: {author['rating']:.1f}%\n"
+            f"🍀 Твоя удача: {author['luck']:.2f}%\n\n"
+            f"🔥 Так держать!",
             parse_mode="HTML"
         )
     except:
@@ -531,12 +554,12 @@ def update_post_reactions_buttons(post_id, chat_id, message_id):
     except:
         pass
 
-# ========== ТОП-10 ==========
+# ========== ТОП-10 (БЕЗ АДМИНОВ) ==========
 
 def get_top_users():
     users = []
     for uid, u in data["users"].items():
-        if uid not in data["banned_users"]:
+        if uid not in data["banned_users"] and not is_admin(uid):  # админов не учитываем
             users.append({
                 "name": get_user_display_name(uid),
                 "rating": u.get("rating", 0),
@@ -648,7 +671,7 @@ def update_quest_progress(user_id, qtype, value=1, extra=None):
 def get_weekly_activity_top(limit=10):
     users = []
     for uid, u in data["users"].items():
-        if uid not in data["banned_users"] and u.get("weekly_activity", 0) > 0:
+        if uid not in data["banned_users"] and not is_admin(uid) and u.get("weekly_activity", 0) > 0:
             users.append({
                 "id": uid,
                 "name": get_user_display_name(uid),
@@ -669,9 +692,11 @@ def award_weekly_top():
     try:
         bot.send_message(
             int(winner["id"]),
-            f"🎁 Ты стал самым активным на неделе!\n"
-            f"Активность: {winner['activity']} очков\n"
-            f"Получи 15 ⭐ от @nickelium"
+            f"🎁 <b>Ты стал самым активным на этой неделе!</b>\n\n"
+            f"📊 Твоя активность: {winner['activity']} очков\n"
+            f"⭐ Получи 15 звёзд от @nickelium\n\n"
+            f"Поздравляем! 🎉",
+            parse_mode="HTML"
         )
     except:
         pass
@@ -685,7 +710,7 @@ def reset_weekly_activity():
         u["weekly_activity"] = 0
         u["weekly_posts"] = 0
         u["weekly_likes"] = 0
-    print_log("INFO", "Активность сброшена")
+    print_log("INFO", "Еженедельная активность сброшена")
     save_data(data)
 
 # ========== НАЛОГ НА РЕЙТИНГ ==========
@@ -706,7 +731,7 @@ def apply_rating_tax():
         taxed += 1
     
     save_data(data)
-    print_log("INFO", f"Налог снят у {taxed} пользователей")
+    print_log("INFO", f"Налог: снят 1% у {taxed} пользователей")
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -723,6 +748,7 @@ def main_keyboard():
         InlineKeyboardButton("📋 Квесты", callback_data="quests"),
         InlineKeyboardButton("📋 История постов", callback_data="post_history"),
         InlineKeyboardButton("⭐ Магазин", callback_data="shop"),
+        InlineKeyboardButton("📞 Горячая линия", callback_data="hotline"),
         InlineKeyboardButton("ℹ️ Инфо", callback_data="info")
     ]
     markup.add(*buttons)
@@ -748,7 +774,7 @@ def admin_main_keyboard():
         InlineKeyboardButton("✅ Вериф управление", callback_data="admin_verified_list"),
         InlineKeyboardButton("👥 Админы", callback_data="admin_admins_list"),
         InlineKeyboardButton("🚫 Баны", callback_data="admin_bans_list"),
-        InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+        InlineKeyboardButton("📊 Статистика бота", callback_data="admin_stats"),
         InlineKeyboardButton("📈 Активность", callback_data="admin_activity")
     )
     return markup
@@ -825,7 +851,7 @@ def inventory_keyboard(user):
 
 def post_history_keyboard(user):
     markup = InlineKeyboardMarkup(row_width=1)
-    posts = user.get("my_posts", [])[-5:]  # последние 5
+    posts = user.get("my_posts", [])[-5:]
     for pid in posts:
         data = user.get("post_history_data", {}).get(str(pid), {})
         if data:
@@ -854,7 +880,7 @@ def start(message):
     user_id = message.from_user.id
     
     if is_banned(user_id):
-        bot.send_message(user_id, "🚫 Вы забанены")
+        bot.send_message(user_id, "🚫 Вы забанены в этом боте.")
         return
     
     user = get_user(user_id)
@@ -875,7 +901,11 @@ def start(message):
                     try:
                         bot.send_message(
                             int(ref),
-                            f"🎉 Новый реферал: {get_user_display_name(user_id)}\nУдача +1%"
+                            f"🎉 <b>У тебя новый реферал!</b>\n\n"
+                            f"👤 {get_user_display_name(user_id)}\n"
+                            f"🍀 Удача +1% (теперь {referrer['luck']:.1f}%)\n"
+                            f"👥 Рефералов: {len(referrer['referrals'])}/{max_ref}",
+                            parse_mode="HTML"
                         )
                         update_quest_progress(ref, "referral", 1)
                     except:
@@ -891,23 +921,31 @@ def start(message):
     cd = get_post_cooldown(user_id)
     
     welcome = (WELCOME_TEXT + 
-               f"\n\nСтатус: {status}\n"
+               f"\n\n<b>Твой профиль:</b>\n"
+               f"Статус: {status}\n"
                f"📈 Рейтинг: {user['rating']:.1f}%\n"
                f"🍀 Удача: {user['luck']:.1f}%\n"
-               f"⏱ КД на пост: {cd}ч")
+               f"⏱ КД на пост: {cd}ч\n\n"
+               f"👇 Выбери действие:")
     
     bot.send_message(user_id, welcome, parse_mode="HTML", reply_markup=main_keyboard())
-    print_log("INFO", f"Пользователь {user_id} зашёл")
+    print_log("INFO", f"Пользователь {user_id} зашёл в бота")
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     user_id = message.from_user.id
     
     if not is_admin(user_id):
-        bot.send_message(user_id, f"🚫 Не админ")
+        bot.send_message(user_id, f"🚫 У тебя нет прав администратора.")
         return
     
-    bot.send_message(user_id, "👑 <b>АДМИН-ПАНЕЛЬ</b>", parse_mode="HTML", reply_markup=admin_main_keyboard())
+    bot.send_message(
+        user_id,
+        "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
+        "Выбери раздел:",
+        parse_mode="HTML",
+        reply_markup=admin_main_keyboard()
+    )
 
 @bot.message_handler(commands=['post'])
 def cmd_post(message):
@@ -921,7 +959,11 @@ def cmd_post(message):
     can_post, cooldown = check_post_cooldown(user)
     
     if not can_post:
-        bot.send_message(user_id, f"⏳ Подожди {format_time(cooldown)}")
+        bot.send_message(
+            user_id,
+            f"⏳ Подожди ещё {format_time(cooldown)} перед следующим постом",
+            reply_markup=main_keyboard()
+        )
         return
     
     prediction = user["rating"] / 2 + user["luck"] / 10
@@ -930,8 +972,10 @@ def cmd_post(message):
     
     bot.send_message(
         user_id,
-        f"📊 Прогноз доставки: {prediction:.1f}%\n\n"
-        f"📝 Отправь текст поста (максимум {max_len} символов):",
+        f"📊 <b>Прогноз доставки:</b> {prediction:.1f}%\n\n"
+        f"📝 Отправь текст поста (максимум {max_len} символов, только текст):\n"
+        f"✨ Постарайся написать что-то интересное!",
+        parse_mode="HTML",
         reply_markup=cancel_keyboard()
     )
     bot.register_next_step_handler(message, receive_post)
@@ -946,12 +990,23 @@ def cmd_casino(message):
     user = get_user(user_id)
     can_play, cooldown = check_casino_cooldown(user)
     
-    status = f"🎰 Твой шанс: {user['luck']:.2f}%\n"
-    if user.get("quest_bonus_ready"):
-        status += "🔥 Бонус +20% готов!\n"
-    status += "✅ Можно" if can_play else f"⏳ Жди {format_time(cooldown)}"
+    status = f"🎰 <b>КАЗИНО LOWHIGH</b>\n\n"
+    status += f"🍀 Твой шанс на победу: {user['luck']:.2f}%\n"
     
-    bot.send_message(user_id, status, reply_markup=casino_keyboard())
+    if user.get("quest_bonus_ready"):
+        status += f"🔥 Бонус +20% за квесты готов! 🔥\n"
+    
+    if can_play:
+        status += f"\n✅ Можно играть! Нажми кнопку ниже.\n"
+        status += f"\n💰 Возможные выигрыши:\n"
+        status += f"• 🍀 Амулет удачи (+10% рейтинга)\n"
+        status += f"• 🔇 Глушитель (8ч без рекламы)\n"
+        status += f"• 👑 VIP-пропуск (3 дня VIP)\n"
+        status += f"• Или +5% к рейтингу (если предмет уже есть)"
+    else:
+        status += f"\n⏳ Следующая попытка через: {format_time(cooldown)}"
+    
+    bot.send_message(user_id, status, parse_mode="HTML", reply_markup=casino_keyboard())
 
 @bot.message_handler(commands=['spin'])
 def cmd_spin(message):
@@ -964,7 +1019,11 @@ def cmd_spin(message):
     can_play, cooldown = check_casino_cooldown(user)
     
     if not can_play:
-        bot.send_message(user_id, f"⏳ Жди {format_time(cooldown)}")
+        bot.send_message(
+            user_id,
+            f"⏳ Подожди ещё {format_time(cooldown)} до следующей крутки",
+            reply_markup=casino_keyboard()
+        )
         return
     
     old_rating = user["rating"]
@@ -973,7 +1032,8 @@ def cmd_spin(message):
         user["rating"] = max(10.0, user["rating"])
     
     bonus = 20 if user.get("quest_bonus_ready") else 0
-    user["quest_bonus_ready"] = False
+    if bonus:
+        user["quest_bonus_ready"] = False
     
     roll = random.uniform(0, 100)
     won = roll <= (user["luck"] + bonus)
@@ -986,10 +1046,18 @@ def cmd_spin(message):
         if inv.get(item, 0) == 0:
             inv[item] = 1
             user["inventory"] = inv
-            result = f"🎉 ПОБЕДА! Ты выиграл: {item}!"
+            result = f"🎉 <b>ПОБЕДА!</b> 🎉\n\n"
+            result += f"Ты выиграл предмет: {item}!\n"
+            if item == "amulet":
+                result += f"🍀 Амулет даст +10% к рейтингу при использовании"
+            elif item == "silencer":
+                result += f"🔇 Глушитель отключит рекламу на 8 часов"
+            else:
+                result += f"👑 VIP-пропуск даст 3 дня VIP"
         else:
             user["rating"] = min(95.0, user["rating"] + 5.0)
-            result = "🎉 ПОБЕДА! +5% к рейтингу (предмет уже есть)"
+            result = f"🎉 <b>ПОБЕДА!</b> 🎉\n\n"
+            result += f"+5% к рейтингу (предмет уже есть в инвентаре)"
         
         user["total_wins"] += 1
         user["fail_counter"] = 0
@@ -999,7 +1067,10 @@ def cmd_spin(message):
         user["fail_counter"] += 1
         inc = user["fail_counter"] * 0.01
         user["luck"] = min(50.0, user["luck"] + inc)
-        result = f"😢 ПРОИГРЫШ\nУдача +{inc:.2f}%"
+        result = f"😢 <b>ПРОИГРЫШ</b>\n\n"
+        result += f"Удача +{inc:.2f}% → {user['luck']:.2f}%\n"
+        result += f"Рейтинг: {old_rating:.1f}% → {user['rating']:.1f}%\n"
+        result += f"🍀 В следующий раз повезёт!"
     
     user["last_casino"] = datetime.now().isoformat()
     user["total_casino_attempts"] += 1
@@ -1008,7 +1079,15 @@ def cmd_spin(message):
     update_quest_progress(user_id, "casino", 1)
     save_data(data)
     
-    bot.send_message(user_id, result, parse_mode="HTML")
+    bot.send_message(
+        user_id,
+        result,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup().add(
+            InlineKeyboardButton("🎰 Ещё раз", callback_data="casino"),
+            InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
+        )
+    )
 
 @bot.message_handler(commands=['top'])
 def cmd_top(message):
@@ -1018,24 +1097,58 @@ def cmd_top(message):
         return
     
     top = get_top_users()
-    text = "🏆 <b>ТОП-10 ПО РЕЙТИНГУ</b>\n\n"
-    for i, u in enumerate(top, 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
-        text += f"{medal} {i}. {u['name']} — 📈 {u['rating']:.1f}% | 🍀 {u['luck']:.1f}%\n"
+    text = "🏆 <b>ТОП-10 ПО РЕЙТИНГУ</b> 🏆\n\n"
+    
+    if not top:
+        text += "Пока нет участников"
+    else:
+        for i, u in enumerate(top, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
+            text += f"{medal} <b>{i}.</b> {u['name']}\n"
+            text += f"   📈 {u['rating']:.1f}% | 🍀 {u['luck']:.1f}% | 📝 {u['posts']}\n"
+    
     bot.send_message(user_id, text, parse_mode="HTML")
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     help_text = """
-<b>КОМАНДЫ БОТА</b>
+<b>📚 КОМАНДЫ LOWHIGH</b>
 
-/post - Написать пост
-/casino - Инфо о казино
-/spin - Крутка
-/top - Топ-10
-/convert - Конвертация 5% → 1% удачи
+<b>Основные команды:</b>
+/post - Написать пост для рассылки
+/casino - Информация о казино
+/spin - Сделать крутку (доступно раз в 8ч)
+/top - Топ-10 игроков по рейтингу
+/convert - Обменять 5% рейтинга на 1% удачи
 /start - Главное меню
 /help - Это сообщение
+
+<b>Дополнительно:</b>
+В главном меню есть кнопки:
+• 👥 Рефералы — приглашай друзей
+• 📊 Статистика — твой профиль
+• 🎒 Инвентарь — твои предметы
+• 📋 Квесты — ежедневные задания
+• 📋 История постов — твои посты
+• ⭐ Магазин — покупки за звёзды
+• 📞 Горячая линия — связь с админами
+• ℹ️ Инфо — о проекте
+
+<b>👑 Админ-команды:</b>
+/admin - Панель администратора
+/setrating ID знач - изменить рейтинг
+/setluck ID знач - изменить удачу
+/addadmin ID - назначить админа
+/removeadmin ID - удалить админа
+/addvip ID [дни] - выдать VIP
+/vipinfo ID - инфо о VIP
+/removevip ID - снять VIP
+/addverified ID - верифицировать
+/removeverified ID - снять верификацию
+/ban ID - забанить
+/unban ID - разбанить
+/delpost ID - удалить пост у всех
+/restime ID - сбросить КД
     """
     bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
 
@@ -1051,12 +1164,23 @@ def cmd_convert(message):
     if user.get("last_convert"):
         last = datetime.fromisoformat(user["last_convert"])
         if datetime.now().date() == last.date():
-            bot.send_message(user_id, "❌ Уже сегодня")
+            bot.send_message(
+                user_id,
+                "❌ Ты уже конвертил сегодня! Завтра будет новая попытка.",
+                reply_markup=main_keyboard()
+            )
             return
     
     if user["rating"] < 5.1:
-        bot.send_message(user_id, "❌ Мало рейтинга (мин 5.1%)")
+        bot.send_message(
+            user_id,
+            "❌ Мало рейтинга! Нужно минимум 5.1%",
+            reply_markup=main_keyboard()
+        )
         return
+    
+    old_rating = user["rating"]
+    old_luck = user["luck"]
     
     user["rating"] -= 5.0
     user["luck"] = min(50.0, user["luck"] + 1.0)
@@ -1065,7 +1189,12 @@ def cmd_convert(message):
     
     bot.send_message(
         user_id,
-        f"✅ Конвертация\nРейтинг: {user['rating']:.1f}%\nУдача: {user['luck']:.1f}%"
+        f"✅ <b>Конвертация выполнена!</b>\n\n"
+        f"📈 Рейтинг: {old_rating:.1f}% → {user['rating']:.1f}%\n"
+        f"🍀 Удача: {old_luck:.1f}% → {user['luck']:.1f}%\n\n"
+        f"Отлично!",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
     )
 
 @bot.message_handler(commands=['restime'])
@@ -1078,7 +1207,7 @@ def restime(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /restime ID")
+        bot.send_message(user_id, "❌ Использование: /restime ID")
         return
     
     target_id = args[1]
@@ -1092,9 +1221,15 @@ def restime(message):
     target["last_post_time"] = None
     save_data(data)
     
-    bot.send_message(user_id, f"✅ КД сброшены для {target_id}")
+    bot.send_message(
+        user_id,
+        f"✅ КД сброшены для пользователя {target_id}"
+    )
     try:
-        bot.send_message(int(target_id), "🔄 Админ сбросил твои КД")
+        bot.send_message(
+            int(target_id),
+            f"🔄 Админ сбросил твои кулдауны! Можешь снова писать пост и крутить казино."
+        )
     except:
         pass
 
@@ -1110,7 +1245,7 @@ def set_rating(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /setrating ID знач")
+        bot.send_message(user_id, "❌ Использование: /setrating ID [значение] или /setrating значение")
         return
     
     try:
@@ -1123,7 +1258,7 @@ def set_rating(message):
         
         target = get_user(target_id)
         if not target:
-            bot.send_message(user_id, "❌ Не найден")
+            bot.send_message(user_id, "❌ Пользователь не найден")
             return
         
         old = target["rating"]
@@ -1134,15 +1269,22 @@ def set_rating(message):
         
         bot.send_message(
             user_id,
-            f"✅ Рейтинг {target_id}: {old:.1f}% → {target['rating']:.1f}%"
+            f"✅ Рейтинг изменён\n"
+            f"👤 {get_user_display_name(target_id)}\n"
+            f"📈 {old:.1f}% → {target['rating']:.1f}%"
         )
+        
         if target_id != str(user_id):
             try:
-                bot.send_message(int(target_id), f"👑 Рейтинг изменён: {old:.1f}% → {target['rating']:.1f}%")
+                bot.send_message(
+                    int(target_id),
+                    f"👑 Админ изменил твой рейтинг\n"
+                    f"📈 {old:.1f}% → {target['rating']:.1f}%"
+                )
             except:
                 pass
     except:
-        bot.send_message(user_id, "❌ Ошибка")
+        bot.send_message(user_id, "❌ Ошибка. Используй /setrating ID 50")
 
 @bot.message_handler(commands=['setluck'])
 def set_luck(message):
@@ -1154,7 +1296,7 @@ def set_luck(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /setluck ID знач")
+        bot.send_message(user_id, "❌ Использование: /setluck ID [значение] или /setluck значение")
         return
     
     try:
@@ -1167,7 +1309,7 @@ def set_luck(message):
         
         target = get_user(target_id)
         if not target:
-            bot.send_message(user_id, "❌ Не найден")
+            bot.send_message(user_id, "❌ Пользователь не найден")
             return
         
         old = target["luck"]
@@ -1176,15 +1318,22 @@ def set_luck(message):
         
         bot.send_message(
             user_id,
-            f"✅ Удача {target_id}: {old:.1f}% → {target['luck']:.1f}%"
+            f"✅ Удача изменена\n"
+            f"👤 {get_user_display_name(target_id)}\n"
+            f"🍀 {old:.1f}% → {target['luck']:.1f}%"
         )
+        
         if target_id != str(user_id):
             try:
-                bot.send_message(int(target_id), f"👑 Удача изменена: {old:.1f}% → {target['luck']:.1f}%")
+                bot.send_message(
+                    int(target_id),
+                    f"👑 Админ изменил твою удачу\n"
+                    f"🍀 {old:.1f}% → {target['luck']:.1f}%"
+                )
             except:
                 pass
     except:
-        bot.send_message(user_id, "❌ Ошибка")
+        bot.send_message(user_id, "❌ Ошибка. Используй /setluck ID 25")
 
 @bot.message_handler(commands=['addadmin'])
 def add_admin(message):
@@ -1196,7 +1345,7 @@ def add_admin(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /addadmin ID")
+        bot.send_message(user_id, "❌ Использование: /addadmin ID")
         return
     
     try:
@@ -1206,15 +1355,24 @@ def add_admin(message):
         if new_id_str not in data["admins"]:
             data["admins"].append(new_id_str)
             save_data(data)
-            bot.send_message(user_id, f"✅ Админ {new_id} добавлен")
+            bot.send_message(
+                user_id,
+                f"✅ Пользователь {new_id} назначен администратором"
+            )
             try:
-                bot.send_message(new_id, "🎉 Ты теперь админ! /admin")
+                bot.send_message(
+                    new_id,
+                    f"🎉 <b>Поздравляем!</b>\n\n"
+                    f"Ты стал администратором бота LowHigh!\n"
+                    f"Используй /admin для входа в панель управления.",
+                    parse_mode="HTML"
+                )
             except:
                 pass
         else:
-            bot.send_message(user_id, "⚠️ Уже админ")
+            bot.send_message(user_id, "⚠️ Уже администратор")
     except:
-        bot.send_message(user_id, "❌ Ошибка")
+        bot.send_message(user_id, "❌ Неверный ID")
 
 @bot.message_handler(commands=['removeadmin'])
 def remove_admin(message):
@@ -1226,7 +1384,7 @@ def remove_admin(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /removeadmin ID")
+        bot.send_message(user_id, "❌ Использование: /removeadmin ID")
         return
     
     try:
@@ -1234,24 +1392,31 @@ def remove_admin(message):
         rem_id_str = str(rem_id)
         
         if rem_id_str == str(user_id):
-            bot.send_message(user_id, "❌ Нельзя удалить себя")
+            bot.send_message(user_id, "❌ Нельзя удалить самого себя")
             return
+        
         if rem_id_str in [str(a) for a in MASTER_ADMINS]:
-            bot.send_message(user_id, "❌ Нельзя удалить главного")
+            bot.send_message(user_id, "❌ Нельзя удалить главного администратора")
             return
         
         if rem_id_str in data["admins"]:
             data["admins"].remove(rem_id_str)
             save_data(data)
-            bot.send_message(user_id, f"✅ Админ {rem_id} удалён")
+            bot.send_message(
+                user_id,
+                f"✅ Администратор {rem_id} удалён"
+            )
             try:
-                bot.send_message(rem_id, "❌ Ты больше не админ")
+                bot.send_message(
+                    rem_id,
+                    f"❌ Твой статус администратора был удалён."
+                )
             except:
                 pass
         else:
-            bot.send_message(user_id, "⚠️ Не админ")
+            bot.send_message(user_id, "⚠️ Не администратор")
     except:
-        bot.send_message(user_id, "❌ Ошибка")
+        bot.send_message(user_id, "❌ Неверный ID")
 
 @bot.message_handler(commands=['addvip'])
 def add_vip(message):
@@ -1263,7 +1428,7 @@ def add_vip(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /addvip ID [дни]")
+        bot.send_message(user_id, "❌ Использование: /addvip ID [дни]")
         return
     
     try:
@@ -1278,11 +1443,21 @@ def add_vip(message):
                 user["vip_until"] = until.isoformat()
                 check_and_fix_rating(new_id_str)
                 save_data(data)
-                bot.send_message(user_id, f"✅ VIP на {days} дн. до {until.strftime('%Y-%m-%d')}")
+                bot.send_message(
+                    user_id,
+                    f"👑 VIP на {days} дней для {new_id}\n"
+                    f"Действует до {until.strftime('%d.%m.%Y %H:%M')}"
+                )
                 try:
                     bot.send_message(
                         new_id,
-                        f"👑 Ты VIP на {days} дн.! Рейтинг поднят до 10%"
+                        f"👑 <b>Поздравляем!</b>\n\n"
+                        f"Ты получил VIP статус на {days} дней!\n"
+                        f"• КД на пост: 2 часа\n"
+                        f"• Рефералов: до 50\n"
+                        f"• Длина поста: 500 символов\n\n"
+                        f"Твой рейтинг поднят до 10%",
+                        parse_mode="HTML"
                     )
                 except:
                     pass
@@ -1293,15 +1468,27 @@ def add_vip(message):
                 data["vip_users"].append(new_id_str)
                 check_and_fix_rating(new_id_str)
                 save_data(data)
-                bot.send_message(user_id, f"✅ Постоянный VIP для {new_id}")
+                bot.send_message(
+                    user_id,
+                    f"👑 Постоянный VIP для {new_id}"
+                )
                 try:
-                    bot.send_message(new_id, "👑 Ты теперь VIP! Рейтинг поднят до 10%")
+                    bot.send_message(
+                        new_id,
+                        f"👑 <b>Поздравляем!</b>\n\n"
+                        f"Ты получил постоянный VIP статус!\n"
+                        f"• КД на пост: 2 часа\n"
+                        f"• Рефералов: до 50\n"
+                        f"• Длина поста: 500 символов\n\n"
+                        f"Твой рейтинг поднят до 10%",
+                        parse_mode="HTML"
+                    )
                 except:
                     pass
             else:
                 bot.send_message(user_id, "⚠️ Уже VIP")
     except:
-        bot.send_message(user_id, "❌ Ошибка")
+        bot.send_message(user_id, "❌ Ошибка. Используй /addvip ID [дни]")
 
 @bot.message_handler(commands=['vipinfo'])
 def vipinfo(message):
@@ -1313,7 +1500,7 @@ def vipinfo(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /vipinfo ID")
+        bot.send_message(user_id, "❌ Использование: /vipinfo ID")
         return
     
     try:
@@ -1321,25 +1508,31 @@ def vipinfo(message):
         target = get_user(target_id)
         
         if not target:
-            bot.send_message(user_id, "❌ Не найден")
+            bot.send_message(user_id, "❌ Пользователь не найден")
             return
         
-        text = f"👑 VIP инфо {target_id}\n"
+        text = f"👑 <b>Информация о VIP</b>\n\n"
+        text += f"ID: {target_id}\n"
+        text += f"Имя: {get_user_display_name(target_id)}\n\n"
+        
         if target.get("vip_until"):
             until = datetime.fromisoformat(target["vip_until"])
             if until > datetime.now():
                 left = until - datetime.now()
-                text += f"Активен до {until.strftime('%Y-%m-%d')} (осталось {left.days} дн.)"
+                text += f"Статус: ✅ активен\n"
+                text += f"До: {until.strftime('%d.%m.%Y %H:%M')}\n"
+                text += f"Осталось: {left.days} дн. {left.seconds//3600} ч."
             else:
-                text += "Истёк"
+                text += f"Статус: ❌ истёк\n"
+                text += f"Истёк: {until.strftime('%d.%m.%Y %H:%M')}"
                 target["vip_until"] = None
                 save_data(data)
         elif target_id in data.get("vip_users", []):
-            text += "Постоянный VIP"
+            text += f"Статус: ✅ постоянный VIP"
         else:
-            text += "Не VIP"
+            text += f"Статус: ❌ не VIP"
         
-        bot.send_message(user_id, text)
+        bot.send_message(user_id, text, parse_mode="HTML")
     except:
         bot.send_message(user_id, "❌ Ошибка")
 
@@ -1353,7 +1546,7 @@ def remove_vip(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /removevip ID")
+        bot.send_message(user_id, "❌ Использование: /removevip ID")
         return
     
     try:
@@ -1373,13 +1566,19 @@ def remove_vip(message):
         
         if removed:
             save_data(data)
-            bot.send_message(user_id, f"✅ VIP снят с {rem_id}")
+            bot.send_message(
+                user_id,
+                f"✅ VIP статус удалён у {rem_id}"
+            )
             try:
-                bot.send_message(rem_id, "❌ VIP статус снят")
+                bot.send_message(
+                    rem_id,
+                    f"❌ Твой VIP статус был удалён администратором."
+                )
             except:
                 pass
         else:
-            bot.send_message(user_id, "⚠️ Не VIP")
+            bot.send_message(user_id, "⚠️ У пользователя нет VIP статуса")
     except:
         bot.send_message(user_id, "❌ Ошибка")
 
@@ -1393,7 +1592,7 @@ def add_verified(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /addverified ID")
+        bot.send_message(user_id, "❌ Использование: /addverified ID")
         return
     
     try:
@@ -1406,9 +1605,21 @@ def add_verified(message):
             data["verified_users"].append(new_id_str)
             check_and_fix_rating(new_id_str)
             save_data(data)
-            bot.send_message(user_id, f"✅ Верифицирован {new_id}")
+            bot.send_message(
+                user_id,
+                f"✅ Пользователь {new_id} верифицирован"
+            )
             try:
-                bot.send_message(new_id, "✅ Ты верифицирован! Рейтинг поднят до 10%")
+                bot.send_message(
+                    new_id,
+                    f"✅ <b>Поздравляем!</b>\n\n"
+                    f"Ты получил статус верифицированного пользователя!\n"
+                    f"• Посты без модерации\n"
+                    f"• Рефералов: до 25\n"
+                    f"• Длина поста: 300 символов\n\n"
+                    f"Твой рейтинг поднят до 10%",
+                    parse_mode="HTML"
+                )
             except:
                 pass
         else:
@@ -1426,7 +1637,7 @@ def remove_verified(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /removeverified ID")
+        bot.send_message(user_id, "❌ Использование: /removeverified ID")
         return
     
     try:
@@ -1436,9 +1647,15 @@ def remove_verified(message):
         if rem_id_str in data.get("verified_users", []):
             data["verified_users"].remove(rem_id_str)
             save_data(data)
-            bot.send_message(user_id, f"✅ Верификация снята с {rem_id}")
+            bot.send_message(
+                user_id,
+                f"✅ Верификация снята с {rem_id}"
+            )
             try:
-                bot.send_message(rem_id, "❌ Верификация снята")
+                bot.send_message(
+                    rem_id,
+                    f"❌ Твой статус верифицированного пользователя был снят."
+                )
             except:
                 pass
         else:
@@ -1456,7 +1673,7 @@ def ban_user(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /ban ID")
+        bot.send_message(user_id, "❌ Использование: /ban ID")
         return
     
     try:
@@ -1466,9 +1683,15 @@ def ban_user(message):
         if ban_id_str not in data["banned_users"]:
             data["banned_users"].append(ban_id_str)
             save_data(data)
-            bot.send_message(user_id, f"🚫 {ban_id} забанен")
+            bot.send_message(
+                user_id,
+                f"🚫 Пользователь {ban_id} забанен"
+            )
             try:
-                bot.send_message(ban_id, "🚫 Вы забанены")
+                bot.send_message(
+                    ban_id,
+                    f"🚫 Вы были забанены администратором."
+                )
             except:
                 pass
         else:
@@ -1486,7 +1709,7 @@ def unban_user(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /unban ID")
+        bot.send_message(user_id, "❌ Использование: /unban ID")
         return
     
     try:
@@ -1496,9 +1719,15 @@ def unban_user(message):
         if unban_id_str in data["banned_users"]:
             data["banned_users"].remove(unban_id_str)
             save_data(data)
-            bot.send_message(user_id, f"✅ {unban_id} разбанен")
+            bot.send_message(
+                user_id,
+                f"✅ Пользователь {unban_id} разбанен"
+            )
             try:
-                bot.send_message(unban_id, "✅ Вы разбанены")
+                bot.send_message(
+                    unban_id,
+                    f"✅ Вы были разбанены администратором."
+                )
             except:
                 pass
         else:
@@ -1516,16 +1745,22 @@ def delete_post(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.send_message(user_id, "❌ /delpost ID")
+        bot.send_message(user_id, "❌ Использование: /delpost ID_поста")
         return
     
     post_id = args[1]
     deleted = delete_post_globally(post_id)
     
     if deleted:
-        bot.send_message(user_id, f"✅ Пост удалён у {deleted} пользователей")
+        bot.send_message(
+            user_id,
+            f"✅ Пост удалён у {deleted} пользователей"
+        )
     else:
-        bot.send_message(user_id, "❌ Пост не найден")
+        bot.send_message(
+            user_id,
+            f"❌ Пост не найден или уже удалён"
+        )
 
 # ========== ОБРАБОТЧИКИ КОЛЛБЭКОВ ==========
 
@@ -1544,7 +1779,7 @@ def callback_handler(call):
     
     data_cmd = call.data
     
-    # ===== РЕАКЦИИ =====
+    # ===== РЕАКЦИИ НА ПОСТЫ =====
     if data_cmd.startswith("like_"):
         post_id = data_cmd.split("_")[1]
         
@@ -1557,12 +1792,12 @@ def callback_handler(call):
         
         if user_id_str in reactions["likes"]:
             reactions["likes"].remove(user_id_str)
-            bot.answer_callback_query(call.id, "Лайк убран")
+            bot.answer_callback_query(call.id, "👍 Лайк убран")
         else:
             if user_id_str in reactions["dislikes"]:
                 reactions["dislikes"].remove(user_id_str)
             reactions["likes"].append(user_id_str)
-            bot.answer_callback_query(call.id, "Лайк поставлен")
+            bot.answer_callback_query(call.id, "👍 Лайк поставлен")
             
             if author_id and author_id != user_id_str:
                 author = get_user(author_id)
@@ -1571,7 +1806,6 @@ def callback_handler(call):
                     author["weekly_activity"] += 2
                     author["weekly_likes"] += 1
                     
-                    # Обновляем историю
                     if "post_history_data" in author and str(post_id) in author["post_history_data"]:
                         author["post_history_data"][str(post_id)]["likes"] += 1
                     
@@ -1595,12 +1829,12 @@ def callback_handler(call):
         
         if user_id_str in reactions["dislikes"]:
             reactions["dislikes"].remove(user_id_str)
-            bot.answer_callback_query(call.id, "Дизлайк убран")
+            bot.answer_callback_query(call.id, "👎 Дизлайк убран")
         else:
             if user_id_str in reactions["likes"]:
                 reactions["likes"].remove(user_id_str)
             reactions["dislikes"].append(user_id_str)
-            bot.answer_callback_query(call.id, "Дизлайк поставлен")
+            bot.answer_callback_query(call.id, "👎 Дизлайк поставлен")
             
             if author_id and author_id != user_id_str:
                 author = get_user(author_id)
@@ -1630,29 +1864,30 @@ def callback_handler(call):
         
         if user_id_str not in reactions["complaints"]:
             reactions["complaints"].append(user_id_str)
-            bot.answer_callback_query(call.id, "Жалоба отправлена")
+            bot.answer_callback_query(call.id, "⚠️ Жалоба отправлена администраторам")
             
             for admin_id in data.get("admins", []):
                 if admin_id != user_id_str:
                     try:
                         text = f"""
-⚠️ ЖАЛОБА НА ПОСТ
+⚠️ <b>ЖАЛОБА НА ПОСТ</b>
 
-ID: {post_id}
-Автор: {author_name} ({author_id})
-От: {get_user_display_name(user_id)} ({user_id})
+<b>ID поста:</b> {post_id}
+<b>Автор:</b> {author_name} (ID: {author_id})
+<b>От:</b> {get_user_display_name(user_id)} (ID: {user_id})
 
-Текст:
+<b>Текст поста:</b>
 {post_text}
 
-/delpost {post_id} - удалить
-/ban {author_id} - забанить
+<b>Действия:</b>
+/delpost {post_id} - удалить пост у всех
+/ban {author_id} - забанить автора
                         """
-                        bot.send_message(int(admin_id), text)
+                        bot.send_message(int(admin_id), text, parse_mode="HTML")
                     except:
                         pass
         else:
-            bot.answer_callback_query(call.id, "Уже жаловались")
+            bot.answer_callback_query(call.id, "Вы уже жаловались на этот пост")
         
         save_data(data)
         return
@@ -1664,7 +1899,7 @@ ID: {post_id}
         
         post_id = data_cmd.split("_")[2]
         deleted = delete_post_globally(post_id)
-        bot.answer_callback_query(call.id, f"Удалено у {deleted}")
+        bot.answer_callback_query(call.id, f"🗑 Пост удалён у {deleted} пользователей")
         return
     
     # ===== АДМИНКА =====
@@ -1684,9 +1919,10 @@ ID: {post_id}
         if not is_admin(user_id):
             return
         bot.edit_message_text(
-            "👑 АДМИН-ПАНЕЛЬ",
+            "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\nВыбери раздел:",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_main_keyboard()
         )
     
@@ -1696,7 +1932,7 @@ ID: {post_id}
         
         if not data["posts"]:
             bot.edit_message_text(
-                "📭 Нет постов",
+                "📭 Нет постов на модерации",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -1706,9 +1942,10 @@ ID: {post_id}
             return
         
         bot.edit_message_text(
-            f"📝 Постов: {len(data['posts'])}",
+            f"📝 <b>Посты на модерации ({len(data['posts'])}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_posts_list_keyboard(data["posts"])
         )
     
@@ -1720,11 +1957,12 @@ ID: {post_id}
         for post in data["posts"]:
             if str(post["id"]) == post_id:
                 author = get_user_display_name(post["user_id"])
-                text = f"📝 Пост от {author}\n\n{post['text']}"
+                text = f"📝 <b>Пост от {author}</b>\n\n{post['text']}"
                 bot.edit_message_text(
                     text,
                     user_id,
                     call.message.message_id,
+                    parse_mode="HTML",
                     reply_markup=admin_post_actions_keyboard(post_id)
                 )
                 break
@@ -1752,19 +1990,25 @@ ID: {post_id}
         data["posts"].pop(idx)
         save_data(data)
         
-        # Уведомление админу
         admin = get_user(user_id)
         if admin and admin.get("admin_notifications", True):
             bot.send_message(
                 user_id,
-                f"✅ Пост одобрен. Доставлено: {sent} пользователям"
+                f"✅ <b>Пост одобрен</b>\n\n"
+                f"📊 Доставлено: {sent} пользователям\n"
+                f"🎯 Гарантированно: {max(1, int((sent or 0) * 0.01))}\n"
+                f"🎲 По шансу: остальные\n\n"
+                f"👍 Отличная работа!",
+                parse_mode="HTML"
             )
         
-        # Уведомление автору
         try:
             bot.send_message(
                 int(post_data["user_id"]),
-                f"✅ Твой пост одобрен и разослан {sent} пользователям!"
+                f"✅ <b>Твой пост одобрен и разослан!</b>\n\n"
+                f"📊 Доставлен {sent} пользователям.\n"
+                f"🔥 Твой рейтинг вырос!",
+                parse_mode="HTML"
             )
         except:
             pass
@@ -1772,24 +2016,25 @@ ID: {post_id}
         if data["posts"]:
             next_post = data["posts"][0]
             author = get_user_display_name(next_post["user_id"])
-            text = f"📝 Следующий пост от {author}\n\n{next_post['text']}"
+            text = f"✅ Пост одобрен. Доставлено: {sent}\n\n📝 <b>Следующий пост от {author}</b>\n\n{next_post['text']}"
             bot.edit_message_text(
                 text,
                 user_id,
                 call.message.message_id,
+                parse_mode="HTML",
                 reply_markup=admin_post_actions_keyboard(next_post['id'])
             )
         else:
             bot.edit_message_text(
-                "✅ Пост одобрен. Больше нет постов.",
+                f"✅ Пост одобрен. Доставлено: {sent}\n\n📭 Больше нет постов на модерации.",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("◀️ В админку", callback_data="admin_main")
+                    InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_main")
                 )
             )
         
-        bot.answer_callback_query(call.id, "✅ Одобрено")
+        bot.answer_callback_query(call.id, "✅ Пост одобрен")
     
     elif data_cmd.startswith("reject_"):
         if not is_admin(user_id):
@@ -1810,7 +2055,6 @@ ID: {post_id}
             bot.answer_callback_query(call.id, "Пост не найден")
             return
         
-        # Запрашиваем причину
         bot.send_message(
             user_id,
             "📝 Напиши причину отказа (или отправь '-' чтобы пропустить):"
@@ -1834,9 +2078,15 @@ ID: {post_id}
                 if banned not in data["banned_users"]:
                     data["banned_users"].append(banned)
                     save_data(data)
-                    bot.send_message(user_id, f"🚫 {banned} забанен")
+                    bot.send_message(
+                        user_id,
+                        f"🚫 Пользователь {banned} ({get_user_display_name(banned)}) забанен"
+                    )
                     try:
-                        bot.send_message(int(banned), "🚫 Вы забанены")
+                        bot.send_message(
+                            int(banned),
+                            f"🚫 Вы были забанены администратором."
+                        )
                     except:
                         pass
                 break
@@ -1853,9 +2103,11 @@ ID: {post_id}
                 data["posts"].pop(i)
                 save_data(data)
                 bot.edit_message_text(
-                    f"📢 Интерпол: доставлено {sent}",
+                    f"📢 <b>Интерпол-рассылка выполнена</b>\n\n"
+                    f"✅ Доставлено: {sent} пользователям",
                     user_id,
-                    call.message.message_id
+                    call.message.message_id,
+                    parse_mode="HTML"
                 )
                 break
     
@@ -1864,9 +2116,11 @@ ID: {post_id}
             return
         
         bot.edit_message_text(
-            "📢 Отправь текст для рассылки ВСЕМ:",
+            "📢 <b>Интерпол-рассылка</b>\n\n"
+            "Отправь текст поста для рассылки <b>ВСЕМ</b> пользователям:",
             user_id,
-            call.message.message_id
+            call.message.message_id,
+            parse_mode="HTML"
         )
         bot.register_next_step_handler_by_chat_id(user_id, receive_interpol_post)
     
@@ -1884,7 +2138,7 @@ ID: {post_id}
         
         if not vip_list:
             bot.edit_message_text(
-                "👑 Нет VIP",
+                "👑 Нет VIP пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -1894,9 +2148,10 @@ ID: {post_id}
             return
         
         bot.edit_message_text(
-            f"👑 VIP ({len(vip_list)})",
+            f"👑 <b>VIP пользователи ({len(vip_list)}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_users_list_keyboard(vip_list, "admin_vip", "admin_main")
         )
     
@@ -1906,11 +2161,12 @@ ID: {post_id}
         
         target = data_cmd.split("_")[2]
         name = get_user_display_name(target)
-        text = f"👑 VIP\nID: {target}\nИмя: {name}"
+        text = f"👑 <b>VIP пользователь</b>\n\nID: {target}\nИмя: {name}"
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_user_actions_keyboard(target, "vip")
         )
     
@@ -1921,7 +2177,7 @@ ID: {post_id}
         ver_list = data.get("verified_users", [])
         if not ver_list:
             bot.edit_message_text(
-                "✅ Нет верифицированных",
+                "✅ Нет верифицированных пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -1931,9 +2187,10 @@ ID: {post_id}
             return
         
         bot.edit_message_text(
-            f"✅ Вериф ({len(ver_list)})",
+            f"✅ <b>Верифицированные пользователи ({len(ver_list)}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_users_list_keyboard(ver_list, "admin_verified", "admin_main")
         )
     
@@ -1943,11 +2200,12 @@ ID: {post_id}
         
         target = data_cmd.split("_")[2]
         name = get_user_display_name(target)
-        text = f"✅ Вериф\nID: {target}\nИмя: {name}"
+        text = f"✅ <b>Верифицированный пользователь</b>\n\nID: {target}\nИмя: {name}"
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_user_actions_keyboard(target, "verified")
         )
     
@@ -1957,9 +2215,10 @@ ID: {post_id}
         
         adm_list = data.get("admins", [])
         bot.edit_message_text(
-            f"👥 Админы ({len(adm_list)})",
+            f"👥 <b>Администраторы ({len(adm_list)}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_users_list_keyboard(adm_list, "admin_admin", "admin_main")
         )
     
@@ -1969,11 +2228,12 @@ ID: {post_id}
         
         target = data_cmd.split("_")[2]
         name = get_user_display_name(target)
-        text = f"👥 Админ\nID: {target}\nИмя: {name}"
+        text = f"👥 <b>Администратор</b>\n\nID: {target}\nИмя: {name}"
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_user_actions_keyboard(target, "admin")
         )
     
@@ -1984,7 +2244,7 @@ ID: {post_id}
         ban_list = data.get("banned_users", [])
         if not ban_list:
             bot.edit_message_text(
-                "🚫 Нет банов",
+                "🚫 Нет забаненных пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -1994,9 +2254,10 @@ ID: {post_id}
             return
         
         bot.edit_message_text(
-            f"🚫 Баны ({len(ban_list)})",
+            f"🚫 <b>Забаненные пользователи ({len(ban_list)}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_users_list_keyboard(ban_list, "admin_banned", "admin_main")
         )
     
@@ -2006,11 +2267,12 @@ ID: {post_id}
         
         target = data_cmd.split("_")[2]
         name = get_user_display_name(target)
-        text = f"🚫 Бан\nID: {target}\nИмя: {name}"
+        text = f"🚫 <b>Забаненный пользователь</b>\n\nID: {target}\nИмя: {name}"
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_user_actions_keyboard(target, "banned")
         )
     
@@ -2018,9 +2280,9 @@ ID: {post_id}
         if not is_admin(user_id):
             return
         
-        total = len(data["users"])
-        banned = len(data["banned_users"])
-        admins = len(data.get("admins", []))
+        total_users = len(data["users"])
+        total_banned = len(data["banned_users"])
+        total_admins = len(data.get("admins", []))
         
         vip_cnt = 0
         for uid, u in data["users"].items():
@@ -2029,27 +2291,28 @@ ID: {post_id}
         vip_cnt += len(data.get("vip_users", []))
         
         ver_cnt = len(data.get("verified_users", []))
-        posts = data["stats"]["total_posts_sent"]
-        games = data["stats"]["total_attempts"]
-        wins = data["stats"]["total_wins"]
+        total_posts = data["stats"]["total_posts_sent"]
+        total_games = data["stats"]["total_attempts"]
+        total_wins = data["stats"]["total_wins"]
         
         text = f"""
-📊 СТАТИСТИКА
+📊 <b>СТАТИСТИКА БОТА</b>
 
-👥 Всего: {total}
-🚫 Банов: {banned}
+👥 Всего пользователей: {total_users}
+🚫 Забанено: {total_banned}
 👑 VIP: {vip_cnt}
-✅ Вериф: {ver_cnt}
-👥 Админов: {admins}
+✅ Верифицировано: {ver_cnt}
+👥 Админов: {total_admins}
 
-📝 Постов: {posts}
-🎰 Игр: {games}
-🏆 Побед: {wins}
+📝 Всего постов: {total_posts}
+🎰 Всего игр: {total_games}
+🏆 Всего побед: {total_wins}
         """
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
             )
@@ -2060,18 +2323,20 @@ ID: {post_id}
             return
         
         top = get_weekly_activity_top(10)
-        text = "📈 АКТИВНОСТЬ ЗА НЕДЕЛЮ\n\n"
+        text = "📈 <b>АКТИВНОСТЬ ЗА НЕДЕЛЮ</b>\n\n"
         if not top:
-            text += "Нет данных"
+            text += "Пока нет данных"
         else:
             for i, u in enumerate(top, 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
                 text += f"{medal} {i}. {u['name']} — {u['activity']} очков\n"
+            text += "\n🏆 В пятницу в 12:00 победитель получает 15 ⭐"
         
         bot.edit_message_text(
             text,
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
             )
@@ -2095,9 +2360,12 @@ ID: {post_id}
         
         if removed:
             save_data(data)
-            bot.answer_callback_query(call.id, "VIP снят")
+            bot.answer_callback_query(call.id, "VIP статус удалён")
             try:
-                bot.send_message(int(target), "❌ VIP снят")
+                bot.send_message(
+                    int(target),
+                    f"❌ Твой VIP статус был удалён администратором."
+                )
             except:
                 pass
         
@@ -2111,14 +2379,15 @@ ID: {post_id}
         
         if vip_list:
             bot.edit_message_text(
-                f"👑 VIP ({len(vip_list)})",
+                f"👑 <b>VIP пользователи ({len(vip_list)}):</b>",
                 user_id,
                 call.message.message_id,
+                parse_mode="HTML",
                 reply_markup=admin_users_list_keyboard(vip_list, "admin_vip", "admin_main")
             )
         else:
             bot.edit_message_text(
-                "👑 Нет VIP",
+                "👑 Нет VIP пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -2135,23 +2404,27 @@ ID: {post_id}
         if target in data.get("verified_users", []):
             data["verified_users"].remove(target)
             save_data(data)
-            bot.answer_callback_query(call.id, "Вериф снята")
+            bot.answer_callback_query(call.id, "Верификация снята")
             try:
-                bot.send_message(int(target), "❌ Верификация снята")
+                bot.send_message(
+                    int(target),
+                    f"❌ Твой статус верифицированного пользователя был снят."
+                )
             except:
                 pass
         
         ver_list = data.get("verified_users", [])
         if ver_list:
             bot.edit_message_text(
-                f"✅ Вериф ({len(ver_list)})",
+                f"✅ <b>Верифицированные пользователи ({len(ver_list)}):</b>",
                 user_id,
                 call.message.message_id,
+                parse_mode="HTML",
                 reply_markup=admin_users_list_keyboard(ver_list, "admin_verified", "admin_main")
             )
         else:
             bot.edit_message_text(
-                "✅ Нет верифицированных",
+                "✅ Нет верифицированных пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -2168,17 +2441,21 @@ ID: {post_id}
         if target in data.get("admins", []) and target not in [str(a) for a in MASTER_ADMINS]:
             data["admins"].remove(target)
             save_data(data)
-            bot.answer_callback_query(call.id, "Админ снят")
+            bot.answer_callback_query(call.id, "Админ удалён")
             try:
-                bot.send_message(int(target), "❌ Админ снят")
+                bot.send_message(
+                    int(target),
+                    f"❌ Твой статус администратора был удалён."
+                )
             except:
                 pass
         
         adm_list = data.get("admins", [])
         bot.edit_message_text(
-            f"👥 Админы ({len(adm_list)})",
+            f"👥 <b>Администраторы ({len(adm_list)}):</b>",
             user_id,
             call.message.message_id,
+            parse_mode="HTML",
             reply_markup=admin_users_list_keyboard(adm_list, "admin_admin", "admin_main")
         )
     
@@ -2191,23 +2468,27 @@ ID: {post_id}
         if target in data.get("banned_users", []):
             data["banned_users"].remove(target)
             save_data(data)
-            bot.answer_callback_query(call.id, "Разбанен")
+            bot.answer_callback_query(call.id, "Пользователь разбанен")
             try:
-                bot.send_message(int(target), "✅ Вы разбанены")
+                bot.send_message(
+                    int(target),
+                    f"✅ Вы были разбанены администратором."
+                )
             except:
                 pass
         
         ban_list = data.get("banned_users", [])
         if ban_list:
             bot.edit_message_text(
-                f"🚫 Баны ({len(ban_list)})",
+                f"🚫 <b>Забаненные пользователи ({len(ban_list)}):</b>",
                 user_id,
                 call.message.message_id,
+                parse_mode="HTML",
                 reply_markup=admin_users_list_keyboard(ban_list, "admin_banned", "admin_main")
             )
         else:
             bot.edit_message_text(
-                "🚫 Нет банов",
+                "🚫 Нет забаненных пользователей",
                 user_id,
                 call.message.message_id,
                 reply_markup=InlineKeyboardMarkup().add(
@@ -2217,29 +2498,45 @@ ID: {post_id}
     
     # ===== ОБЫЧНОЕ МЕНЮ =====
     elif data_cmd == "main_menu":
-        bot.send_message(user_id, "Главное меню:", reply_markup=main_keyboard())
+        bot.send_message(
+            user_id,
+            "🎩 <b>Главное меню</b>\n\nВыбери действие:",
+            parse_mode="HTML",
+            reply_markup=main_keyboard()
+        )
     
     elif data_cmd == "casino":
         can_play, cd = check_casino_cooldown(user)
-        text = f"🎰 Шанс: {user['luck']:.2f}%\n"
+        text = f"🎰 <b>КАЗИНО LOWHIGH</b>\n\n"
+        text += f"🍀 Твой шанс: {user['luck']:.2f}%\n"
         if user.get("quest_bonus_ready"):
-            text += "🔥 Бонус +20% готов!\n"
-        text += "✅ Можно" if can_play else f"⏳ {format_time(cd)}"
-        bot.send_message(user_id, text, reply_markup=casino_keyboard())
+            text += f"🔥 Бонус +20% готов!\n"
+        text += f"\n"
+        if can_play:
+            text += f"✅ Можно играть! Нажми кнопку ниже."
+        else:
+            text += f"⏳ Следующая попытка через: {format_time(cd)}"
+        bot.send_message(
+            user_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=casino_keyboard()
+        )
     
     elif data_cmd == "casino_spin":
         can_play, cd = check_casino_cooldown(user)
         if not can_play:
-            bot.answer_callback_query(call.id, f"Жди {format_time(cd)}")
+            bot.answer_callback_query(call.id, f"Жди ещё {format_time(cd)}")
             return
         
-        old = user["rating"]
+        old_rating = user["rating"]
         user["rating"] = max(5.0, user["rating"] - 1.0)
         if is_vip(user_id) or is_verified(user_id):
             user["rating"] = max(10.0, user["rating"])
         
         bonus = 20 if user.get("quest_bonus_ready") else 0
-        user["quest_bonus_ready"] = False
+        if bonus:
+            user["quest_bonus_ready"] = False
         
         roll = random.uniform(0, 100)
         won = roll <= (user["luck"] + bonus)
@@ -2252,10 +2549,18 @@ ID: {post_id}
             if inv.get(item, 0) == 0:
                 inv[item] = 1
                 user["inventory"] = inv
-                result = f"🎉 ПОБЕДА! Ты выиграл: {item}!"
+                result = f"🎉 <b>ПОБЕДА!</b>\n\n"
+                result += f"Ты выиграл: <b>{item}</b>!"
+                if item == "amulet":
+                    result += "\n🍀 Используй в инвентаре для +10% рейтинга"
+                elif item == "silencer":
+                    result += "\n🔇 Глушитель отключит рекламу на 8 часов"
+                else:
+                    result += "\n👑 VIP-пропуск даст 3 дня VIP"
             else:
                 user["rating"] = min(95.0, user["rating"] + 5.0)
-                result = "🎉 ПОБЕДА! +5% к рейтингу"
+                result = f"🎉 <b>ПОБЕДА!</b>\n\n"
+                result += f"+5% к рейтингу (предмет уже есть в инвентаре)"
             
             user["total_wins"] += 1
             user["fail_counter"] = 0
@@ -2265,7 +2570,10 @@ ID: {post_id}
             user["fail_counter"] += 1
             inc = user["fail_counter"] * 0.01
             user["luck"] = min(50.0, user["luck"] + inc)
-            result = f"😢 ПРОИГРЫШ\nУдача +{inc:.2f}%"
+            result = f"😢 <b>ПРОИГРЫШ</b>\n\n"
+            result += f"Удача +{inc:.2f}% → {user['luck']:.2f}%\n"
+            result += f"Рейтинг: {old_rating:.1f}% → {user['rating']:.1f}%\n"
+            result += f"🍀 В следующий раз повезёт!"
         
         user["last_casino"] = datetime.now().isoformat()
         user["total_casino_attempts"] += 1
@@ -2274,19 +2582,21 @@ ID: {post_id}
         update_quest_progress(user_id, "casino", 1)
         save_data(data)
         
-        bot.send_message(
-            user_id,
+        bot.edit_message_text(
             result,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("🎰 Ещё", callback_data="casino"),
-                InlineKeyboardButton("🏠 Меню", callback_data="main_menu")
+                InlineKeyboardButton("🎰 Ещё раз", callback_data="casino"),
+                InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
             )
         )
     
     elif data_cmd == "write_post":
         can_post, cd = check_post_cooldown(user)
         if not can_post:
-            bot.answer_callback_query(call.id, f"Жди {format_time(cd)}")
+            bot.answer_callback_query(call.id, f"Жди ещё {format_time(cd)}")
             return
         
         pred = user["rating"] / 2 + user["luck"] / 10
@@ -2295,32 +2605,47 @@ ID: {post_id}
         
         bot.send_message(
             user_id,
-            f"📊 Прогноз: {pred:.1f}%\n\n📝 Текст (макс {max_len}):",
+            f"📊 <b>Прогноз доставки:</b> {pred:.1f}%\n\n"
+            f"📝 Отправь текст поста (максимум {max_len} символов):\n"
+            f"✨ Постарайся написать что-то интересное!",
+            parse_mode="HTML",
             reply_markup=cancel_keyboard()
         )
         bot.register_next_step_handler_by_chat_id(user_id, receive_post)
     
     elif data_cmd == "cancel_post":
         bot.clear_step_handler_by_chat_id(user_id)
-        bot.send_message(user_id, "❌ Отменено", reply_markup=main_keyboard())
+        bot.send_message(
+            user_id,
+            "❌ Отправка отменена",
+            reply_markup=main_keyboard()
+        )
     
     elif data_cmd == "referrals":
         try:
             bot_username = bot.get_me().username
             link = f"https://t.me/{bot_username}?start={user_id}"
         except:
-            link = "ошибка"
+            link = "Ошибка получения ссылки"
         
         cnt = len(user.get("referrals", []))
         max_ref = get_max_referrals(user_id)
         
         text = f"""
-👥 Рефералы: {cnt}/{max_ref}
-Ссылка: {link}
+👥 <b>РЕФЕРАЛЬНАЯ СИСТЕМА</b>
+
+Ты пригласил: {cnt}/{max_ref} друзей
+Каждый друг даёт +1% к удаче навсегда
+
+🔗 Твоя ссылка:
+<code>{link}</code>
+
+Отправь её друзьям и получай бонусы!
         """
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
@@ -2343,27 +2668,28 @@ ID: {post_id}
             ref_bonus = total_ref / 100
         
         text = f"""
-📊 ТВОЯ СТАТИСТИКА
+📊 <b>ТВОЯ СТАТИСТИКА</b>
 
 📈 Рейтинг: {user['rating']:.1f}%
 🍀 Удача: {user['luck']:.2f}%
 📻 Приём: {user['incoming_chance']}%
-💰 Бонус рефов: +{ref_bonus:.2f}%
-⏱ КД поста: {get_post_cooldown(user_id)}ч
+💰 Бонус от рефералов: +{ref_bonus:.2f}%
+⏱ КД на пост: {get_post_cooldown(user_id)}ч
 
-📝 Постов: {user['total_posts']}
-🎰 Игр: {user['total_casino_attempts']}
-🏆 Побед: {user['total_wins']}
-👥 Рефералов: {len(user.get('referrals', []))}
+📝 Постов написано: {user['total_posts']}
+🎰 Игр сыграно: {user['total_casino_attempts']}
+🏆 Побед в казино: {user['total_wins']}
+👥 Рефералов: {len(user.get('referrals', []))}/{get_max_referrals(user_id)}
 
-🌍 Глобально:
-👍 Лайков: {total_likes}
-👎 Дизлайков: {total_dislikes}
-📨 Постов всего: {data['stats']['total_posts_sent']}
+🌍 <b>Глобальная статистика:</b>
+👍 Всего лайков: {total_likes}
+👎 Всего дизлайков: {total_dislikes}
+📨 Всего постов: {data['stats']['total_posts_sent']}
         """
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
@@ -2371,13 +2697,18 @@ ID: {post_id}
     
     elif data_cmd == "top":
         top = get_top_users()
-        text = "🏆 ТОП-10\n\n"
-        for i, u in enumerate(top, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
-            text += f"{medal} {i}. {u['name']} — {u['rating']:.1f}%\n"
+        text = "🏆 <b>ТОП-10 ПО РЕЙТИНГУ</b>\n\n"
+        if not top:
+            text += "Пока нет участников"
+        else:
+            for i, u in enumerate(top, 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
+                text += f"{medal} <b>{i}.</b> {u['name']}\n"
+                text += f"   📈 {u['rating']:.1f}% | 🍀 {u['luck']:.1f}% | 📝 {u['posts']}\n"
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
@@ -2387,19 +2718,27 @@ ID: {post_id}
         if user.get("last_convert"):
             last = datetime.fromisoformat(user["last_convert"])
             if datetime.now().date() == last.date():
-                bot.answer_callback_query(call.id, "Уже сегодня")
+                bot.answer_callback_query(call.id, "❌ Уже сегодня!")
                 return
         if user["rating"] < 5.1:
-            bot.answer_callback_query(call.id, "Мало рейтинга")
+            bot.answer_callback_query(call.id, "❌ Мало рейтинга (мин 5.1%)")
             return
+        
+        old_rating = user["rating"]
+        old_luck = user["luck"]
+        
         user["rating"] -= 5.0
         user["luck"] = min(50.0, user["luck"] + 1.0)
         user["last_convert"] = datetime.now().isoformat()
         save_data(data)
-        bot.answer_callback_query(call.id, "✅ Конвертация")
+        
+        bot.answer_callback_query(call.id, "✅ Конвертация выполнена!")
         bot.send_message(
             user_id,
-            f"Рейтинг: {user['rating']:.1f}%\nУдача: {user['luck']:.1f}%",
+            f"✅ <b>Конвертация выполнена!</b>\n\n"
+            f"📈 Рейтинг: {old_rating:.1f}% → {user['rating']:.1f}%\n"
+            f"🍀 Удача: {old_luck:.1f}% → {user['luck']:.1f}%",
+            parse_mode="HTML",
             reply_markup=main_keyboard()
         )
     
@@ -2418,13 +2757,20 @@ ID: {post_id}
                 user["silencer_until"] = None
         
         text = f"""
-🎒 ИНВЕНТАРЬ
+🎒 <b>ТВОЙ ИНВЕНТАРЬ</b>
 
-🍀 Амулет: {inv.get('amulet', 0)}
+🍀 Амулет удачи: {inv.get('amulet', 0)}
 🔇 Глушитель: {inv.get('silencer', 0)}{sil}
 👑 VIP-пропуск: {inv.get('vip_pass', 0)}
+
+Максимум 1 предмет каждого типа.
         """
-        bot.send_message(user_id, text, reply_markup=inventory_keyboard(user))
+        bot.send_message(
+            user_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=inventory_keyboard(user)
+        )
     
     elif data_cmd == "use_amulet":
         inv = user.get("inventory", {})
@@ -2433,10 +2779,17 @@ ID: {post_id}
             inv["amulet"] = 0
             user["inventory"] = inv
             save_data(data)
-            bot.answer_callback_query(call.id, "🍀 +10% рейтинга")
-            bot.send_message(user_id, "Амулет использован!", reply_markup=main_keyboard())
+            bot.answer_callback_query(call.id, "🍀 +10% рейтинга!")
+            bot.send_message(
+                user_id,
+                f"🍀 <b>Амулет использован!</b>\n\n"
+                f"📈 Рейтинг увеличен на 10%!\n"
+                f"Текущий рейтинг: {user['rating']:.1f}%",
+                parse_mode="HTML",
+                reply_markup=main_keyboard()
+            )
         else:
-            bot.answer_callback_query(call.id, "Нет амулета")
+            bot.answer_callback_query(call.id, "У тебя нет амулета")
     
     elif data_cmd == "activate_silencer":
         inv = user.get("inventory", {})
@@ -2446,23 +2799,31 @@ ID: {post_id}
             inv["silencer"] = 0
             user["inventory"] = inv
             save_data(data)
-            bot.answer_callback_query(call.id, "🔇 Глушитель включён")
+            bot.answer_callback_query(call.id, "🔇 Глушитель активирован")
             bot.send_message(
                 user_id,
-                f"🔇 Глушитель до {until.strftime('%H:%M')}",
+                f"🔇 <b>Глушитель активирован</b>\n\n"
+                f"Ты не будешь получать чужие посты до {until.strftime('%H:%M')}.",
+                parse_mode="HTML",
                 reply_markup=main_keyboard()
             )
         else:
-            bot.answer_callback_query(call.id, "Нельзя")
+            bot.answer_callback_query(call.id, "Нельзя активировать")
     
     elif data_cmd == "deactivate_silencer":
         if user.get("silencer_until"):
             user["silencer_until"] = None
             save_data(data)
             bot.answer_callback_query(call.id, "🔇 Глушитель выключен")
-            bot.send_message(user_id, "Глушитель выключен", reply_markup=main_keyboard())
+            bot.send_message(
+                user_id,
+                "🔇 <b>Глушитель деактивирован</b>\n\n"
+                "Теперь ты снова получаешь посты.",
+                parse_mode="HTML",
+                reply_markup=main_keyboard()
+            )
         else:
-            bot.answer_callback_query(call.id, "Не активен")
+            bot.answer_callback_query(call.id, "Глушитель не активен")
     
     elif data_cmd == "use_vippass":
         inv = user.get("inventory", {})
@@ -2473,34 +2834,42 @@ ID: {post_id}
             user["inventory"] = inv
             check_and_fix_rating(user_id)
             save_data(data)
-            bot.answer_callback_query(call.id, "👑 VIP на 3 дня")
+            bot.answer_callback_query(call.id, "👑 VIP на 3 дня!")
             bot.send_message(
                 user_id,
-                f"👑 VIP до {until.strftime('%Y-%m-%d')}",
+                f"👑 <b>VIP-пропуск использован!</b>\n\n"
+                f"Ты получил VIP статус до {until.strftime('%d.%m.%Y %H:%M')}\n"
+                f"📈 Рейтинг поднят до 10%\n"
+                f"• КД на пост: 2 часа\n"
+                f"• Рефералов: до 50\n"
+                f"• Длина поста: 500 символов",
+                parse_mode="HTML",
                 reply_markup=main_keyboard()
             )
         else:
-            bot.answer_callback_query(call.id, "Нет пропуска")
+            bot.answer_callback_query(call.id, "У тебя нет VIP-пропуска")
     
     elif data_cmd == "quests":
         generate_daily_quests(user_id)
         qd = user.get("quests", {})
         if not qd:
-            bot.send_message(user_id, "❌ Ошибка")
+            bot.send_message(user_id, "❌ Ошибка загрузки квестов")
             return
         
-        text = "📋 КВЕСТЫ\n\n"
+        text = "📋 <b>КВЕСТЫ НА СЕГОДНЯ</b>\n\n"
         for i, t in enumerate(qd.get("tasks", [])):
             status = "✅" if qd["completed"][i] else "☐"
             prog = f"{qd['progress'][i]}/{t['target']}" if not qd["completed"][i] else ""
             text += f"{status} {t['desc']} {prog} — {t['reward']}\n"
-        bonus = "🏆 Бонус за все: +20% к крутке "
+        
+        bonus = "🏆 <b>Бонус за все:</b> +20% к следующей крутке "
         bonus += "✅" if user.get("quest_bonus_ready") else "❌"
         text += f"\n{bonus}"
         
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
@@ -2510,7 +2879,8 @@ ID: {post_id}
         if not user.get("my_posts"):
             bot.send_message(
                 user_id,
-                "📋 У тебя пока нет постов",
+                "📋 <b>ИСТОРИЯ ПОСТОВ</b>\n\nУ тебя пока нет постов.",
+                parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup().add(
                     InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
                 )
@@ -2519,7 +2889,8 @@ ID: {post_id}
         
         bot.send_message(
             user_id,
-            "📋 ИСТОРИЯ ПОСТОВ",
+            "📋 <b>ИСТОРИЯ ПОСТОВ</b>\n\nВыбери пост:",
+            parse_mode="HTML",
             reply_markup=post_history_keyboard(user)
         )
     
@@ -2532,16 +2903,17 @@ ID: {post_id}
             return
         
         text = f"""
-📝 Пост от {post_data.get('date', '?')[:10]}
+📝 <b>Пост от {post_data.get('date', '?')[:10]}</b>
 
 {post_data['text']}
 
-👍 {post_data.get('likes', 0)} лайков
-👎 {post_data.get('dislikes', 0)} дизлайков
+👍 <b>Лайков:</b> {post_data.get('likes', 0)}
+👎 <b>Дизлайков:</b> {post_data.get('dislikes', 0)}
         """
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=history_post_actions_keyboard(post_id)
         )
     
@@ -2553,13 +2925,11 @@ ID: {post_id}
             bot.answer_callback_query(call.id, "Пост не найден")
             return
         
-        # Проверяем КД
         can_post, cd = check_post_cooldown(user)
         if not can_post:
-            bot.answer_callback_query(call.id, f"Жди {format_time(cd)}")
+            bot.answer_callback_query(call.id, f"Жди ещё {format_time(cd)}")
             return
         
-        # Создаём новый пост
         new_post = {
             "id": int(time.time() * 1000),
             "user_id": str(user_id),
@@ -2571,14 +2941,17 @@ ID: {post_id}
         user["last_post_time"] = datetime.now().isoformat()
         user["posts_count"] = user.get("posts_count", 0) + 1
         
-        # Отправляем как верифицированный (без модерации)
         sent = send_post_to_users(new_post, user_id)
         user["total_posts"] += 1
         save_data(data)
         
         bot.send_message(
             user_id,
-            f"✅ Пост повторно разослан! Доставлено: {sent}"
+            f"✅ <b>Пост повторно разослан!</b>\n\n"
+            f"📊 Доставлено: {sent} пользователям\n"
+            f"🎯 Гарантированно: {max(1, int((sent or 0) * 0.01))}\n"
+            f"🎲 По шансу: остальные",
+            parse_mode="HTML"
         )
         bot.answer_callback_query(call.id, "✅ Пост отправлен")
     
@@ -2588,28 +2961,55 @@ ID: {post_id}
         
         if deleted:
             bot.answer_callback_query(call.id, f"🗑 Удалено у {deleted}")
-            bot.send_message(user_id, f"Пост удалён у {deleted} пользователей")
+            bot.send_message(
+                user_id,
+                f"🗑 <b>Пост удалён</b>\n\n"
+                f"Удалено у {deleted} пользователей.",
+                parse_mode="HTML"
+            )
         else:
-            bot.answer_callback_query(call.id, "❌ Не найден")
+            bot.answer_callback_query(call.id, "❌ Пост не найден")
+    
+    elif data_cmd == "hotline":
+        can, cd = check_hotline_cooldown(user)
+        if not can:
+            bot.answer_callback_query(call.id, f"⏳ Подожди {format_time(cd)}")
+            return
+        
+        bot.send_message(
+            user_id,
+            "📞 <b>ГОРЯЧАЯ ЛИНИЯ</b>\n\n"
+            "Напиши сообщение для администраторов.\n"
+            "Они ответят тебе в личку как только смогут.\n\n"
+            "⚠️ Используй эту функцию только по делу!",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard()
+        )
+        bot.register_next_step_handler_by_chat_id(user_id, receive_hotline_message)
     
     elif data_cmd == "shop":
         text = f"""
-⭐ МАГАЗИН
+⭐ <b>МАГАЗИН LOWHIGH</b>
 
-Покупки через ЛС {OWNER_USERNAME}
+Покупки только через личные сообщения.
+Пиши {OWNER_USERNAME} и указывай, что хочешь купить.
 
-👑 VIP на неделю — 100 ⭐
-📈 +25% рейтинга — 50 ⭐
-🎰 +10% удачи — 15 ⭐
+💰 <b>ЦЕНЫ:</b>
+• 👑 VIP на неделю — 100 ⭐
+• 📈 +25% к рейтингу — 50 ⭐
+• 🎰 +10% к удаче — 15 ⭐
 
-📢 РЕКЛАМА:
+📢 <b>ПЛАТНАЯ РЕКЛАМА:</b>
 • 50 ⭐ — обычный пост (250 символов, без мата)
-• 100 ⭐ — любой пост (400 символов, мат можно)
-Рассылка всем!
+• 100 ⭐ — любой пост (400 символов, мат разрешён)
+Рассылается ВСЕМ пользователям мгновенно!
+
+После оплаты ты получишь товар в течение 5 минут.
         """
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
@@ -2617,25 +3017,34 @@ ID: {post_id}
     
     elif data_cmd == "info":
         text = f"""
-ℹ️ LOWHIGH
+ℹ️ <b>О ПРОЕКТЕ LOWHIGH</b>
 
-👑 Владелец: {OWNER_USERNAME}
-📌 Только некоммерческая реклама
+👑 <b>Владелец:</b> {OWNER_USERNAME}
+📌 <b>Тип:</b> Некоммерческая рассылка
+🚫 <b>Важно:</b> Коммерческие проекты не рекламировать!
 
-🎁 Каждую пятницу в 12:00
-самый активный получает 15 ⭐
+🎁 <b>КОНКУРС КАЖДУЮ ПЯТНИЦУ</b>
+В 12:00 самый активный пользователь недели
+получает подарок на 15 ⭐
 
-🏆 Активность: посты, лайки, рефералы, казино
+🏆 <b>Активность считается по:</b>
+• Написанным постам
+• Полученным лайкам
+• Приглашённым друзьям
+• Играм в казино
+
+📊 <b>Версия бота:</b> 3.3
         """
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
             )
         )
 
-# ========== ПРИЁМ ПОСТОВ ==========
+# ========== ПРИЁМ СООБЩЕНИЙ ==========
 
 def receive_post(message):
     user_id = message.from_user.id
@@ -2650,15 +3059,23 @@ def receive_post(message):
     
     can_post, cd = check_post_cooldown(user)
     if not can_post:
-        bot.send_message(user_id, f"⏳ Жди {format_time(cd)}", reply_markup=main_keyboard())
+        bot.send_message(
+            user_id,
+            f"⏳ Подожди ещё {format_time(cd)} перед следующим постом",
+            reply_markup=main_keyboard()
+        )
         return
     
     if message.text and message.text.lower() in ["отмена", "cancel"]:
-        bot.send_message(user_id, "❌ Отменено", reply_markup=main_keyboard())
+        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
         return
     
     if message.content_type != 'text':
-        bot.send_message(user_id, "❌ Только текст!", reply_markup=main_keyboard())
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст! Картинки и другие файлы не поддерживаются.",
+            reply_markup=main_keyboard()
+        )
         return
     
     if not message.text:
@@ -2668,7 +3085,8 @@ def receive_post(message):
     if len(message.text) > max_len:
         bot.send_message(
             user_id,
-            f"❌ Максимум {max_len} символов",
+            f"❌ Пост слишком длинный! Максимум {max_len} символов.\n"
+            f"У тебя: {len(message.text)} символов",
             reply_markup=main_keyboard()
         )
         return
@@ -2694,7 +3112,9 @@ def receive_post(message):
         sent = send_post_to_users(post, user_id)
         bot.send_message(
             user_id,
-            f"✅ Пост разослан! Доставлено: {sent}",
+            f"✅ <b>Пост мгновенно разослан!</b>\n\n"
+            f"📊 Доставлено: {sent} пользователям",
+            parse_mode="HTML",
             reply_markup=main_keyboard()
         )
         user["total_posts"] += 1
@@ -2706,7 +3126,10 @@ def receive_post(message):
         
         bot.send_message(
             user_id,
-            "✅ Пост отправлен на модерацию",
+            f"✅ <b>Пост отправлен на модерацию!</b>\n\n"
+            f"Как только администратор одобрит, он уйдёт в рассылку.\n"
+            f"Обычно это занимает не больше часа.",
+            parse_mode="HTML",
             reply_markup=main_keyboard()
         )
         
@@ -2719,7 +3142,9 @@ def receive_post(message):
                     try:
                         bot.send_message(
                             int(admin_id),
-                            f"🆕 Новый пост от {get_user_display_name(user_id)}!\n/admin"
+                            f"🆕 <b>Новый пост от {get_user_display_name(user_id)}!</b>\n"
+                            f"/admin - для модерации",
+                            parse_mode="HTML"
                         )
                     except:
                         pass
@@ -2732,35 +3157,42 @@ def receive_reject_reason(message, post_data, post_index):
     
     reason = message.text if message.text and message.text != '-' else "Причина не указана"
     
-    # Удаляем пост
     data["posts"].pop(post_index)
     save_data(data)
     
-    # Уведомляем автора
     try:
         bot.send_message(
             int(post_data["user_id"]),
-            f"❌ Твой пост отклонён.\nПричина: {reason}"
+            f"❌ <b>Твой пост отклонён</b>\n\n"
+            f"📝 <b>Причина:</b> {reason}\n\n"
+            f"Не расстраивайся, попробуй ещё раз!",
+            parse_mode="HTML"
         )
     except:
         pass
     
-    bot.send_message(user_id, f"❌ Пост отклонён. Причина отправлена автору.")
+    bot.send_message(
+        user_id,
+        f"❌ <b>Пост отклонён</b>\n\n"
+        f"Причина отправлена автору.",
+        parse_mode="HTML"
+    )
     
-    # Показываем следующий пост
     if data["posts"]:
         next_post = data["posts"][0]
         author = get_user_display_name(next_post["user_id"])
-        text = f"📝 Следующий пост от {author}\n\n{next_post['text']}"
+        text = f"📝 <b>Следующий пост от {author}</b>\n\n{next_post['text']}"
         bot.send_message(
             user_id,
             text,
+            parse_mode="HTML",
             reply_markup=admin_post_actions_keyboard(next_post['id'])
         )
     else:
         bot.send_message(
             user_id,
-            "📭 Больше нет постов",
+            "📭 <b>Больше нет постов на модерации</b>",
+            parse_mode="HTML",
             reply_markup=admin_main_keyboard()
         )
 
@@ -2771,7 +3203,11 @@ def receive_interpol_post(message):
         return
     
     if message.content_type != 'text':
-        bot.send_message(user_id, "❌ Только текст!", reply_markup=admin_main_keyboard())
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст!",
+            reply_markup=admin_main_keyboard()
+        )
         return
     
     if message.text:
@@ -2786,9 +3222,63 @@ def receive_interpol_post(message):
         sent = send_post_to_users(post, user_id, force_all=True)
         bot.send_message(
             user_id,
-            f"📢 Интерпол: доставлено {sent}",
+            f"📢 <b>Интерпол-рассылка выполнена!</b>\n\n"
+            f"✅ Доставлено: {sent} пользователям",
+            parse_mode="HTML",
             reply_markup=admin_main_keyboard()
         )
+
+def receive_hotline_message(message):
+    user_id = message.from_user.id
+    
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 Вы забанены")
+        return
+    
+    user = get_user(user_id)
+    if not user:
+        return
+    
+    if message.text and message.text.lower() in ["отмена", "cancel"]:
+        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
+        return
+    
+    if message.content_type != 'text':
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст!",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    user["last_hotline"] = datetime.now().isoformat()
+    save_data(data)
+    
+    text = f"""
+📞 <b>ГОРЯЧАЯ ЛИНИЯ</b>
+
+<b>От:</b> {get_user_display_name(user_id)} (ID: {user_id})
+<b>Время:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}
+
+<b>Сообщение:</b>
+{message.text}
+
+Ответьте пользователю в личку.
+    """
+    
+    for admin_id in data.get("admins", []):
+        try:
+            bot.send_message(int(admin_id), text, parse_mode="HTML")
+        except:
+            pass
+    
+    bot.send_message(
+        user_id,
+        "✅ <b>Сообщение отправлено администраторам!</b>\n\n"
+        "Они ответят тебе в личку в ближайшее время.",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
 
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 
@@ -2818,11 +3308,12 @@ def background_tasks():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v3.2")
+    print("     LowHigh v3.3")
     print("="*50)
     print(f"{Colors.END}")
     
     print_log("INFO", f"Мастер-админы: {MASTER_ADMINS}")
+    print_log("INFO", f"Всего админов: {len(data.get('admins', []))}")
     print_log("INFO", f"Всего юзеров: {len(data['users'])}")
     print_log("INFO", f"Постов в очереди: {len(data['posts'])}")
     print_log("INFO", "Бот запущен...")
@@ -2833,6 +3324,6 @@ if __name__ == "__main__":
         try:
             bot.infinity_polling()
         except Exception as e:
-            print_log("ERROR", f"Ошибка: {e}")
-            print_log("INFO", "Перезапуск...")
+            print_log("ERROR", f"Критическая ошибка: {e}")
+            print_log("INFO", "Перезапуск через 10 секунд...")
             time.sleep(10)
