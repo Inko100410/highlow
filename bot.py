@@ -1,4 +1,4 @@
-# LowHigh v4.0 — ФИНАЛЬНАЯ ВЕРСИЯ
+# LowHigh v4.1 — ФИНАЛЬНАЯ ВЕРСИЯ С БЭКАПАМИ
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
@@ -14,22 +14,12 @@ TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
 MASTER_ADMINS = [6656110482, 8525294722]
 OWNER_USERNAME = "@nickelium"
 
-# Путь для базы данных (Volume в /main)
-if os.path.exists("/main"):
-    DATA_FILE = "/main/bot_data.json"
-    print("✅ Использую Volume: /main/data/bot_data.json")
-else:
-    try:
-        os.makedirs("/main", exist_ok=True)
-        DATA_FILE = "/main/bot_data.json"
-        print("✅ Папка /main создана")
-    except:
-        DATA_FILE = "bot_data.json"
-        print("⚠️ Использую локальный файл: bot_data.json")
+# Путь для базы данных
+DATA_FILE = "bot_data.json"
 
 bot = telebot.TeleBot(TOKEN)
 
-# ========== ЦВЕТА ДЛЯ ЛОГОВ ==========
+# ========== КРАСИВЫЕ ПРИНТЫ ==========
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -154,7 +144,7 @@ def get_user(user_id):
             "rating": 5.0,
             "luck": 1.0,
             "fail_counter": 0,
-            "incoming_chance": 5.0,  # ИСПРАВЛЕНО: было 50%, стало 5%
+            "incoming_chance": 5.0,
             "last_casino": None,
             "last_post_time": None,
             "posts_count": 0,
@@ -494,7 +484,7 @@ def send_post_to_users(post, admin_id, force_all=False):
                 reply_markup=markup
             )
             sent += 1
-            author["rating"] = min(95.0, author["rating"] + 0.01)  # +0.01% за доставку
+            author["rating"] = min(95.0, author["rating"] + 0.01)
             data["post_history"][str(post_id)][str(uid)] = msg.message_id
             author["weekly_activity"] = author.get("weekly_activity", 0) + 5
             author["weekly_posts"] = author.get("weekly_posts", 0) + 1
@@ -538,7 +528,7 @@ def send_post_to_users(post, admin_id, force_all=False):
                 )
                 sent += 1
                 chance_hits += 1
-                author["rating"] = min(95.0, author["rating"] + 0.01)  # +0.01% за доставку
+                author["rating"] = min(95.0, author["rating"] + 0.01)
                 data["post_history"][str(post_id)][str(uid)] = msg.message_id
                 author["weekly_activity"] += 5
                 author["weekly_posts"] += 1
@@ -793,7 +783,18 @@ def admin_main_keyboard():
         InlineKeyboardButton("📊 Статистика бота", callback_data="admin_stats"),
         InlineKeyboardButton("📈 Активность", callback_data="admin_activity"),
         InlineKeyboardButton("📋 Аудит действий", callback_data="admin_audit"),
-        InlineKeyboardButton("👀 Поиск юзера", callback_data="admin_search_user")
+        InlineKeyboardButton("👀 Поиск юзера", callback_data="admin_search_user"),
+        InlineKeyboardButton("💾 Бэкап", callback_data="admin_backup_menu")
+    )
+    return markup
+
+def admin_backup_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📤 Скачать бэкап", callback_data="admin_backup_save"),
+        InlineKeyboardButton("📥 Загрузить бэкап", callback_data="admin_backup_load"),
+        InlineKeyboardButton("📋 Список бэкапов", callback_data="admin_backup_list"),
+        InlineKeyboardButton("◀️ Назад", callback_data="admin_main")
     )
     return markup
 
@@ -881,6 +882,93 @@ def history_post_actions_keyboard(post_id):
         InlineKeyboardButton("◀️ Назад", callback_data="post_history")
     )
     return markup
+
+# ========== БЭКАПЫ ==========
+
+@bot.message_handler(commands=['backupsave'])
+def backup_save(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        bot.send_message(user_id, "🚫 Только для админов")
+        return
+    
+    try:
+        with open(DATA_FILE, 'rb') as f:
+            bot.send_document(
+                user_id, 
+                f, 
+                visible_file_name=f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json',
+                caption="✅ Бэкап базы данных"
+            )
+        log_admin_action(user_id, "Скачал бэкап")
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Ошибка: {e}")
+
+@bot.message_handler(commands=['backupload'])
+def backup_upload_start(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        bot.send_message(user_id, "🚫 Только для админов")
+        return
+    
+    msg = bot.send_message(
+        user_id,
+        "📤 Отправь мне JSON-файл с бэкапом.\n"
+        "❗ После загрузки текущие данные будут ЗАМЕНЕНЫ."
+    )
+    bot.register_next_step_handler(msg, receive_backup_file)
+
+def receive_backup_file(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if message.document:
+        file_info = bot.get_file(message.document.file_id)
+        
+        if not message.document.file_name.endswith('.json'):
+            bot.send_message(user_id, "❌ Файл должен быть JSON")
+            return
+        
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        try:
+            new_data = json.loads(downloaded_file.decode('utf-8'))
+            
+            if "users" not in new_data:
+                bot.send_message(user_id, "❌ Непохоже на файл базы данных")
+                return
+            
+            temp_backup = DATA_FILE + ".pre_restore"
+            if os.path.exists(DATA_FILE):
+                os.replace(DATA_FILE, temp_backup)
+            
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(new_data, f, ensure_ascii=False, indent=2)
+            
+            global data
+            data = new_data
+            
+            bot.send_message(
+                user_id,
+                f"✅ База восстановлена!\n"
+                f"👥 Пользователей: {len(data['users'])}\n"
+                f"📝 Постов в очереди: {len(data['posts'])}"
+            )
+            log_admin_action(user_id, "Восстановил базу из бэкапа")
+            
+        except json.JSONDecodeError:
+            bot.send_message(user_id, "❌ Файл повреждён (не JSON)")
+        except Exception as e:
+            bot.send_message(user_id, f"❌ Ошибка: {e}")
+            if os.path.exists(temp_backup):
+                os.replace(temp_backup, DATA_FILE)
+                load_data()
+    else:
+        bot.send_message(user_id, "❌ Отправь файл, а не текст")
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
@@ -1130,6 +1218,8 @@ def cmd_help(message):
 /delpost ID - удалить пост у всех
 /restime @user - сбросить КД
 /profile @user - просмотр профиля
+/backupsave - скачать бэкап базы
+/backupload - загрузить бэкап базы
     """
     bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
 
@@ -1168,16 +1258,14 @@ def cmd_convert(message):
         parse_mode="HTML"
     )
 
-# ========== АДМИН-КОМАНДЫ (С ЮЗЕРНЕЙМАМИ) ==========
+# ========== АДМИН-КОМАНДЫ ==========
 
 def resolve_target(target):
-    """Преобразует @username или ID в ID пользователя"""
     if target.startswith("@"):
         uid, _ = get_user_by_username(target[1:])
         if uid:
             return uid
     try:
-        # Проверяем, может это ID
         uid = str(int(target))
         if get_user(uid):
             return uid
@@ -1964,7 +2052,8 @@ def callback_handler(call):
         "interpol_", "admin_vip_list", "admin_verified_list", "admin_admins_list",
         "admin_bans_list", "admin_stats", "admin_activity", "admin_audit",
         "admin_search_user", "admin_add_rating_", "admin_add_luck_",
-        "admin_make_vip_", "admin_make_verified_", "admin_ban_"
+        "admin_make_vip_", "admin_make_verified_", "admin_ban_",
+        "admin_backup_menu", "admin_backup_save", "admin_backup_load", "admin_backup_list"
     ]:
         pass
     else:
@@ -1982,6 +2071,69 @@ def callback_handler(call):
             call.message.message_id,
             parse_mode="HTML",
             reply_markup=admin_main_keyboard()
+        )
+    
+    elif data_cmd == "admin_backup_menu":
+        if not is_admin(user_id):
+            return
+        bot.edit_message_text(
+            "💾 <b>УПРАВЛЕНИЕ БЭКАПАМИ</b>\n\n"
+            "Выбери действие:",
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=admin_backup_keyboard()
+        )
+    
+    elif data_cmd == "admin_backup_save":
+        if not is_admin(user_id):
+            return
+        
+        try:
+            with open(DATA_FILE, 'rb') as f:
+                bot.send_document(
+                    user_id, 
+                    f, 
+                    visible_file_name=f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json',
+                    caption="✅ Бэкап базы данных"
+                )
+            log_admin_action(user_id, "Скачал бэкап")
+            bot.answer_callback_query(call.id, "✅ Бэкап отправлен")
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {e}")
+    
+    elif data_cmd == "admin_backup_load":
+        if not is_admin(user_id):
+            return
+        
+        bot.edit_message_text(
+            "📤 <b>ЗАГРУЗКА БЭКАПА</b>\n\n"
+            "Отправь мне JSON-файл с бэкапом.\n"
+            "❗ После загрузки текущие данные будут ЗАМЕНЕНЫ.",
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML"
+        )
+        bot.register_next_step_handler_by_chat_id(user_id, receive_backup_file)
+    
+    elif data_cmd == "admin_backup_list":
+        if not is_admin(user_id):
+            return
+        
+        text = "📋 <b>СПИСОК БЭКАПОВ</b>\n\n"
+        text += "Автоматические бэкапы создаются при каждом сохранении.\n"
+        text += f"Текущий файл: {DATA_FILE}\n"
+        text += f"Размер: {os.path.getsize(DATA_FILE) if os.path.exists(DATA_FILE) else 0} байт\n\n"
+        text += "Используй /backupsave для скачивания."
+        
+        bot.edit_message_text(
+            text,
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("◀️ Назад", callback_data="admin_backup_menu")
+            )
         )
     
     elif data_cmd == "admin_posts_list":
@@ -2380,7 +2532,6 @@ def callback_handler(call):
         if not is_admin(user_id):
             return
         
-        # Топ по активности за неделю
         active_users = []
         for uid, u in data["users"].items():
             if uid not in data["banned_users"] and u.get("weekly_activity", 0) > 0:
@@ -3069,7 +3220,7 @@ def callback_handler(call):
 📌 <b>Тип:</b> Некоммерческая рассылка
 🚫 <b>Важно:</b> Коммерческие проекты не рекламировать!
 
-📊 <b>Версия бота:</b> 4.0
+📊 <b>Версия бота:</b> 4.1
         """
         bot.send_message(
             user_id,
@@ -3394,7 +3545,6 @@ def background_tasks():
             last_tax = now
         
         if now.weekday() == 5 and (not last_reset or last_reset.date() != now.date()):
-            # Сброс еженедельной активности
             for u in data["users"].values():
                 u["weekly_activity"] = 0
                 u["weekly_posts"] = 0
@@ -3410,7 +3560,7 @@ def background_tasks():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v4.0")
+    print("     LowHigh v4.1")
     print("="*50)
     print(f"{Colors.END}")
     
