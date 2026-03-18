@@ -233,42 +233,26 @@ def get_user(user_id):
     return data["users"][user_id]
 
 def resolve_target(target, create_if_not_exists=False):
-    """Преобразует @username или ID в ID пользователя (с автосозданием и нормализацией)"""
+def resolve_target(target, create_if_not_exists=False):
+    """Преобразует @username или ID в ID пользователя (ТОЛЬКО по базе данных)"""
     if target.startswith("@"):
-        username = target[1:].lower()  # Приводим к нижнему регистру
-        # Ищем по юзернейму (без учёта регистра)
+        username = target[1:].lower()
+        # Ищем ТОЛЬКО в существующей базе
         for uid, user in data["users"].items():
-            if user.get("username") and user["username"].lower() == username:
+            stored_username = user.get("username")
+            if stored_username and stored_username.lower() == username:
                 return uid
-        
-        # Если не нашли и нужно создать
-        if create_if_not_exists:
-            try:
-                # Пробуем получить инфо из Telegram
-                chat = bot.get_chat(username)
-                uid = str(chat.id)
-                # Создаём пользователя
-                get_user(uid)
-                # Обновляем юзернейм (сохраняем оригинальный)
-                user = data["users"][uid]
-                user["username"] = chat.username
-                user["first_name"] = chat.first_name
-                save_data(data)
-                return uid
-            except Exception as e:
-                print_log("ERROR", f"Не удалось получить пользователя {username}: {e}")
-                return None
+        return None  # Не нашли в базе - возвращаем None
     
     try:
         uid = str(int(target))
-        if get_user(uid):
+        # Проверяем, есть ли такой ID в базе
+        if uid in data["users"]:
             return uid
-        elif create_if_not_exists:
-            get_user(uid)
-            return uid
+        # Не создаём новых пользователей по ID
+        return None
     except:
-        pass
-    return None
+        return None
 
 def get_user_display_name(user_id, hide_username=True):
     """Возвращает имя пользователя для отображения (без @ если hide_username=True)"""
@@ -1501,7 +1485,7 @@ def cmd_top(message):
         text += "Пока нет участников"
     else:
         for i, u in enumerate(top, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "◽"
             text += f"{medal} <b>{i}.</b> {u['name']}\n"
             text += f"   📈 {u['rating']:.1f}% | 🍀 {u['luck']:.1f}% | 📝 {u['posts']}\n"
     
@@ -3637,7 +3621,7 @@ def callback_handler(call):
 📢 <b>ПЛАТНАЯ РЕКЛАМА:</b>
 • 50 ⭐ — обычный пост (250 символов, без мата)
 • 100 ⭐ — любой пост (400 символов, мат разрешён)
-Рассылается ВСЕМ пользователям мгновенно!
+Рассылается ВСЕМ пользователям, а также ВСЕМ группам мгновенно!
 
 После оплаты ты получишь товар в течение 5 минут.
         """
@@ -3925,7 +3909,13 @@ def admin_search_user(message):
     if not target_id:
         bot.send_message(
             user_id,
-            "❌ Пользователь не найден",
+            f"❌ Пользователь {query} не найден в базе бота.\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь ещё не запускал бота\n"
+            f"• Неправильный username\n"
+            f"• Пользователь заблокировал бота\n\n"
+            f"Попробуй найти по ID или попроси пользователя написать /start",
+            parse_mode="HTML",
             reply_markup=admin_main_keyboard()
         )
         return
@@ -3983,7 +3973,6 @@ def admin_search_user(message):
         reply_markup=admin_user_profile_keyboard(target_id)
     )
     log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
-
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 
 def background_tasks():
