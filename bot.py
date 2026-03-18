@@ -1,4 +1,4 @@
-# LowHigh v5.0 — ФИНАЛЬНАЯ ВЕРСИЯ С ГРУППАМИ
+# LowHigh v5.0 — ФИНАЛЬНАЯ ВЕРСИЯ С ГРУППАМИ (ИСПРАВЛЕНО)
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 import random
@@ -132,7 +132,7 @@ def load_data():
     
     return {
         "users": {},
-        "groups": {},  # добавлено для групп
+        "groups": {},
         "posts": [],
         "banned_users": [],
         "admins": MASTER_ADMINS.copy(),
@@ -227,8 +227,8 @@ def get_group(chat_id):
             "join_date": format_msk_time(datetime.now()),
             "last_activity": format_msk_time(datetime.now()),
             "owner_id": None,
-            "admins": [],  # админы группы
-            "vip": False,  # есть ли у владельца VIP
+            "admins": [],
+            "vip": False,
             "stats": {
                 "posts_sent": 0,
                 "posts_received": 0
@@ -263,7 +263,7 @@ def is_group_admin(chat_id, user_id):
 def resolve_target(target, create_if_not_exists=False):
     """Преобразует @username или ID в ID пользователя (с автосозданием)"""
     if target.startswith("@"):
-        username = target[1:].lower()  # приводим к нижнему регистру
+        username = target[1:].lower()
         # Ищем по юзернейму (без учёта регистра)
         for uid, user in data["users"].items():
             if user.get("username") and user["username"].lower() == username:
@@ -1541,44 +1541,6 @@ def cmd_convert(message):
 
 # ========== АДМИН-КОМАНДЫ ==========
 
-def resolve_target(target, create_if_not_exists=False):
-    """Преобразует @username или ID в ID пользователя (с автосозданием)"""
-    if target.startswith("@"):
-        username = target[1:].lower()
-        # Ищем по юзернейму (без учёта регистра)
-        for uid, user in data["users"].items():
-            if user.get("username") and user["username"].lower() == username:
-                return uid
-        
-        # Если не нашли и нужно создать
-        if create_if_not_exists:
-            try:
-                # Пробуем получить инфо из Telegram
-                chat = bot.get_chat(username)
-                uid = str(chat.id)
-                # Создаём пользователя
-                get_user(uid)
-                # Обновляем юзернейм
-                user = data["users"][uid]
-                user["username"] = chat.username
-                user["first_name"] = chat.first_name
-                save_data(data)
-                return uid
-            except Exception as e:
-                print_log("ERROR", f"Не удалось найти пользователя {target}: {e}")
-                return None
-    
-    try:
-        uid = str(int(target))
-        if get_user(uid):
-            return uid
-        elif create_if_not_exists:
-            get_user(uid)
-            return uid
-    except:
-        pass
-    return None
-
 @bot.message_handler(commands=['setrating'])
 def set_rating(message):
     user_id = message.from_user.id
@@ -2353,22 +2315,6 @@ def callback_handler(call):
         return
     
     # ===== АДМИНКА =====
-    if data_cmd.startswith("admin_") or data_cmd in [
-        "admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_",
-        "interpol_", "admin_vip_list", "admin_verified_list", "admin_admins_list",
-        "admin_bans_list", "admin_stats", "admin_activity", "admin_audit",
-        "admin_search_user", "admin_add_rating_", "admin_add_luck_",
-        "admin_make_vip_", "admin_make_verified_", "admin_ban_",
-        "admin_backup_menu", "admin_backup_save", "admin_backup_load", "admin_backup_list",
-        "admin_group_post"
-    ]:
-        pass
-    else:
-        try:
-            bot.delete_message(user_id, call.message.message_id)
-        except:
-            pass
-    
     if data_cmd == "admin_main":
         if not is_admin(user_id):
             return
