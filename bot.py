@@ -1,4 +1,4 @@
-# LowHigh v4.3 — ФИНАЛЬНАЯ ВЕРСИЯ (ГРУППЫ, НАЛОГИ, БЭКАПЫ)
+# LowHigh v4.4 — ИСПРАВЛЕННАЯ ВЕРСИЯ (РАБОТАЕТ С ДАТАМИ И ПОИСКОМ)
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
@@ -27,12 +27,24 @@ def msk_time(dt=None):
     return dt + timedelta(hours=3)
 
 def format_msk_time(dt):
-    """Форматирует время в МСК"""
+    """Форматирует время в МСК (ДД.ММ.ГГГГ ЧЧ:ММ)"""
     return msk_time(dt).strftime("%d.%m.%Y %H:%M")
 
 def now_msk():
     """Текущее время по МСК"""
     return msk_time()
+
+def parse_date(date_str):
+    """Безопасный парсинг даты из строки ДД.ММ.ГГГГ ЧЧ:ММ"""
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%d.%m.%Y %H:%M")
+    except:
+        try:
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        except:
+            return None
 
 # ========== КРАСИВЫЕ ПРИНТЫ ==========
 class Colors:
@@ -45,7 +57,7 @@ class Colors:
     BOLD = '\033[1m'
 
 def print_log(level, message):
-    timestamp = format_msk_time(datetime.now())[11:16]  # только часы:минуты
+    timestamp = format_msk_time(datetime.now())[11:16]
     if level == "INFO":
         print(f"{Colors.BLUE}[{timestamp}][INFO]{Colors.END} {message}")
     elif level == "SUCCESS":
@@ -80,7 +92,7 @@ def log_admin_action(admin_id, action, details=""):
         audit_log.pop(0)
     print_log("ADMIN", f"{admin_name}: {action} {details}")
 
-# ========== БАЗА ДАННЫХ С БЕЗОПАСНЫМ ВОССТАНОВЛЕНИЕМ ==========
+# ========== БАЗА ДАННЫХ ==========
 def save_data(data):
     temp_file = DATA_FILE + ".tmp"
     backup_file = DATA_FILE + ".backup"
@@ -104,27 +116,6 @@ def save_data(data):
         if os.path.exists(backup_file):
             os.replace(backup_file, DATA_FILE)
         return False
-
-def safe_merge_data(old_data, new_data):
-    """Безопасно сливает старую и новую структуру данных"""
-    if not isinstance(new_data, dict):
-        return old_data
-    
-    # Базовая структура
-    result = old_data.copy()
-    
-    # Поля, которые нужно обновить
-    for key in ["users", "posts", "banned_users", "admins", "vip_users", 
-                "verified_users", "post_history", "post_contents", "stats", 
-                "post_reactions", "global_reactions"]:
-        if key in new_data:
-            result[key] = new_data[key]
-    
-    # Добавляем новые поля, если их нет
-    if "daily_stats" not in result["stats"]:
-        result["stats"]["daily_stats"] = {}
-    
-    return result
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -155,7 +146,7 @@ def load_data():
         "admins": MASTER_ADMINS.copy(),
         "vip_users": [],
         "verified_users": [],
-        "groups": {},  # Новое поле для групп
+        "groups": {},
         "post_history": {},
         "post_contents": {},
         "stats": {
@@ -169,6 +160,12 @@ def load_data():
     }
 
 data = load_data()
+
+# Добавляем админов из JSON если их там нет
+for admin_id in data.get("admins", []):
+    if admin_id not in MASTER_ADMINS and admin_id not in [str(a) for a in MASTER_ADMINS]:
+        if isinstance(admin_id, int):
+            MASTER_ADMINS.append(admin_id)
 
 # ========== РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ==========
 
@@ -232,29 +229,68 @@ def get_user(user_id):
     
     return data["users"][user_id]
 
-def resolve_target(target, create_if_not_exists=False):
-    """Преобразует @username или ID в ID пользователя (ТОЛЬКО по базе данных)"""
-    if target.startswith("@"):
-        username = target[1:].lower()
-        # Ищем ТОЛЬКО в существующей базе
-        for uid, user in data["users"].items():
-            stored_username = user.get("username")
-            if stored_username and stored_username.lower() == username:
-                return uid
-        return None  # Не нашли в базе - возвращаем None
+def find_user_by_username(username):
+    """Ищет пользователя по username (без @)"""
+    if not username:
+        return None
     
+    username = username.lower().strip()
+    if username.startswith('@'):
+        username = username[1:]
+    
+    for uid, user in data["users"].items():
+        stored = user.get("username")
+        if stored and stored.lower().strip() == username:
+            return uid
+    return None
+
+def find_user_by_id(uid):
+    """Проверяет существование пользователя по ID"""
+    uid = str(uid)
+    return uid if uid in data["users"] else None
+
+def find_user_by_partial(query):
+    """Ищет пользователя по части имени или username"""
+    query = query.lower().strip()
+    results = []
+    
+    for uid, user in data["users"].items():
+        username = user.get("username", "").lower()
+        first_name = user.get("first_name", "").lower()
+        
+        if query in username or query in first_name:
+            results.append(uid)
+    
+    return results[:5]  # Максимум 5 результатов
+
+def resolve_target(target):
+    """Поиск пользователя по ID или @username"""
+    if not target:
+        return None
+    
+    target = target.strip()
+    
+    # Поиск по ID
     try:
         uid = str(int(target))
-        # Проверяем, есть ли такой ID в базе
         if uid in data["users"]:
             return uid
-        # Не создаём новых пользователей по ID
-        return None
     except:
-        return None
+        pass
+    
+    # Поиск по @username
+    if target.startswith('@'):
+        return find_user_by_username(target[1:])
+    
+    # Поиск по username без @
+    uid = find_user_by_username(target)
+    if uid:
+        return uid
+    
+    return None
 
 def get_user_display_name(user_id, hide_username=True):
-    """Возвращает имя пользователя для отображения (без @ если hide_username=True)"""
+    """Возвращает имя пользователя для отображения"""
     user_id = str(user_id)
     user = data["users"].get(user_id)
     if not user:
@@ -264,28 +300,14 @@ def get_user_display_name(user_id, hide_username=True):
         if user.get("first_name"):
             return user["first_name"]
         if user.get("username"):
-            return user["username"]  # без @
-        try:
-            chat = bot.get_chat(int(user_id))
-            name = chat.first_name or "Аноним"
-            user["first_name"] = name
-            save_data(data)
-            return name
-        except:
-            return f"User_{user_id[-4:]}"
+            return user["username"]
+        return f"User_{user_id[-4:]}"
     else:
         if user.get("username"):
             return "@" + user["username"]
         if user.get("first_name"):
             return user["first_name"]
-        try:
-            chat = bot.get_chat(int(user_id))
-            name = chat.first_name or "Аноним"
-            user["first_name"] = name
-            save_data(data)
-            return name
-        except:
-            return f"User_{user_id[-4:]}"
+        return f"User_{user_id[-4:]}"
 
 def get_user_status_emoji(user_id):
     user_id = str(user_id)
@@ -329,10 +351,14 @@ def get_post_cooldown(user_id):
         return 8
 
 def check_post_cooldown(user):
-    if not user["last_post_time"]:
+    if not user.get("last_post_time"):
         return True, 0
     
-    last = datetime.fromisoformat(user["last_post_time"]) - timedelta(hours=3)
+    last = parse_date(user["last_post_time"])
+    if not last:
+        return True, 0
+    
+    last = last - timedelta(hours=3)
     cooldown_hours = get_post_cooldown(user)
     next_time = last + timedelta(hours=cooldown_hours)
     now = datetime.now()
@@ -344,7 +370,10 @@ def check_post_cooldown(user):
 def check_hotline_cooldown(user):
     if not user.get("last_hotline"):
         return True, 0
-    last = datetime.fromisoformat(user["last_hotline"]) - timedelta(hours=3)
+    last = parse_date(user["last_hotline"])
+    if not last:
+        return True, 0
+    last = last - timedelta(hours=3)
     next_time = last + timedelta(hours=1)
     now = datetime.now()
     if now >= next_time:
@@ -361,9 +390,12 @@ def get_max_post_length(user_id):
         return 250
 
 def check_casino_cooldown(user):
-    if not user["last_casino"]:
+    if not user.get("last_casino"):
         return True, 0
-    last = datetime.fromisoformat(user["last_casino"]) - timedelta(hours=3)
+    last = parse_date(user["last_casino"])
+    if not last:
+        return True, 0
+    last = last - timedelta(hours=3)
     next_time = last + timedelta(hours=8)
     now = datetime.now()
     if now >= next_time:
@@ -444,10 +476,7 @@ def send_group_post(post, admin_id):
     total_groups = len(all_groups)
     print_log("POST", f"Групповая рассылка от {get_user_display_name(from_user_id, hide_username=False)}. Всего групп: {total_groups}")
     
-    # Проверяем VIP статус владельца
     is_owner_vip = is_vip(from_user_id)
-    
-    # Гарантированная доставка: минимум 1 группа или 1% от всех групп
     guaranteed = max(1, int(total_groups * 0.01))
     print_log("POST", f"Гарантированная доставка по группам: {guaranteed} групп")
     
@@ -458,7 +487,6 @@ def send_group_post(post, admin_id):
     sent = 0
     post_id = post["id"]
     
-    # Сохраняем содержимое поста
     data["post_contents"][str(post_id)] = {
         "text": post["text"],
         "author_id": from_user_id,
@@ -468,10 +496,9 @@ def send_group_post(post, admin_id):
     author_emoji = get_user_status_emoji(from_user_id)
     formatted_text = f"<i>{post['text']}</i>"
     
-    # Отправляем в гарантированные группы
     for chat_id, group_data in guaranteed_groups:
         try:
-            msg = bot.send_message(
+            bot.send_message(
                 int(chat_id),
                 f"📢 <b>Пост для групп</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
                 parse_mode="HTML"
@@ -485,14 +512,13 @@ def send_group_post(post, admin_id):
         except Exception as e:
             print_log("ERROR", f"Ошибка отправки в группу {chat_id}: {e}")
     
-    # Отправляем в остальные по шансу
     chance_hits = 0
-    base_chance = 5 if is_owner_vip else 1  # VIP даёт 5% шанс
+    base_chance = 5 if is_owner_vip else 1
     
     for chat_id, group_data in chance_groups:
         if random.uniform(0, 100) <= base_chance:
             try:
-                msg = bot.send_message(
+                bot.send_message(
                     int(chat_id),
                     f"📢 <b>Пост для групп</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
                     parse_mode="HTML"
@@ -509,7 +535,7 @@ def send_group_post(post, admin_id):
     
     percent_delivered = (sent / total_groups) * 100 if total_groups > 0 else 0
     
-    print_log("POST", f"✅ Групповой пост доставлен {sent}/{total_groups} группам ({percent_delivered:.1f}%) (гарантия: {guaranteed}, шанс: {chance_hits})")
+    print_log("POST", f"✅ Групповой пост доставлен {sent}/{total_groups} группам ({percent_delivered:.1f}%)")
     
     try:
         bot.send_message(
@@ -553,14 +579,10 @@ def is_vip(user_id):
         return False
     
     if user.get("vip_until"):
-        try:
-            until = datetime.fromisoformat(user["vip_until"]) - timedelta(hours=3)
-            if datetime.now() < until:
-                return True
-            else:
-                user["vip_until"] = None
-                save_data(data)
-        except:
+        until = parse_date(user["vip_until"])
+        if until and datetime.now() < until:
+            return True
+        else:
             user["vip_until"] = None
     
     return user_id in data.get("vip_users", [])
@@ -617,13 +639,10 @@ def send_post_to_users(post, admin_id, force_all=False):
             continue
         
         if user_data.get("silencer_until"):
-            try:
-                until = datetime.fromisoformat(user_data["silencer_until"]) - timedelta(hours=3)
-                if datetime.now() < until:
-                    continue
-                else:
-                    user_data["silencer_until"] = None
-            except:
+            until = parse_date(user_data["silencer_until"])
+            if until and datetime.now() < until:
+                continue
+            else:
                 user_data["silencer_until"] = None
         
         recipients.append((uid, user_data))
@@ -753,7 +772,7 @@ def send_post_to_users(post, admin_id, force_all=False):
     
     percent_delivered = (sent / total) * 100 if total > 0 else 0
     
-    print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам ({percent_delivered:.1f}%) (гарантия: {guaranteed}, шанс: {chance_hits})")
+    print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам ({percent_delivered:.1f}%)")
     
     try:
         bot.send_message(
@@ -821,7 +840,7 @@ def update_post_reactions_buttons(post_id, chat_id, message_id):
     except:
         pass
 
-# ========== ТОП-10 (БЕЗ АДМИНОВ, НО С ВИП/ВЕРИФ) ==========
+# ========== ТОП-10 ==========
 
 def get_top_users():
     users = []
@@ -956,7 +975,6 @@ def apply_rating_tax():
         
         taxed += 1
         
-        # Уведомляем пользователя о налоге (если рейтинг изменился)
         if old_rating != user["rating"]:
             try:
                 bot.send_message(
@@ -1175,7 +1193,6 @@ def backup_upload_start(message):
         bot.send_message(user_id, "🚫 Только для админов")
         return
     
-    # Проверяем, является ли пользователь мастер-админом (только для загрузки)
     if not is_master_admin(user_id):
         bot.send_message(user_id, "🚫 Только главный админ может загружать бэкапы")
         return
@@ -1209,11 +1226,9 @@ def receive_backup_file(message):
                 bot.send_message(user_id, "❌ Непохоже на файл базы данных")
                 return
             
-            # Безопасное слияние данных
             global data
-            data = safe_merge_data(data, new_data)
+            data = new_data
             
-            # Создаём бэкап перед сохранением
             temp_backup = DATA_FILE + ".pre_restore"
             if os.path.exists(DATA_FILE):
                 os.replace(DATA_FILE, temp_backup)
@@ -1252,10 +1267,9 @@ def start(message):
     
     user = get_user(user_id)
     user["first_name"] = message.from_user.first_name
+    user["username"] = message.from_user.username
     
-    # Проверяем, не группа ли это
     if message.chat.type in ["group", "supergroup"]:
-        # Добавляем группу в базу
         if add_group(message.chat.id, message.chat.title, user_id):
             bot.send_message(
                 user_id,
@@ -1288,9 +1302,6 @@ def start(message):
                     except:
                         pass
                     save_data(data)
-    
-    user["username"] = message.from_user.username
-    user["first_name"] = message.from_user.first_name
     
     generate_daily_quests(user_id)
     
@@ -1484,7 +1495,7 @@ def cmd_top(message):
         text += "Пока нет участников"
     else:
         for i, u in enumerate(top, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "◽"
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▫️"
             text += f"{medal} <b>{i}.</b> {u['name']}\n"
             text += f"   📈 {u['rating']:.1f}% | 🍀 {u['luck']:.1f}% | 📝 {u['posts']}\n"
     
@@ -1539,8 +1550,8 @@ def cmd_convert(message):
     user = get_user(user_id)
     
     if user.get("last_convert"):
-        last = datetime.fromisoformat(user["last_convert"]) - timedelta(hours=3)
-        if now_msk().date() == (last + timedelta(hours=3)).date():
+        last = parse_date(user["last_convert"])
+        if last and now_msk().date() == (last + timedelta(hours=3)).date():
             bot.send_message(user_id, "❌ Уже конвертил сегодня! Завтра будет новая попытка.")
             return
     
@@ -1586,7 +1597,7 @@ def set_rating(message):
         bot.send_message(user_id, "❌ Значение должно быть числом")
         return
     
-    target_id = resolve_target(target_username, create_if_not_exists=True)
+    target_id = resolve_target(target_username)
     if not target_id:
         bot.send_message(user_id, "❌ Пользователь не найден")
         return
@@ -1635,7 +1646,7 @@ def set_luck(message):
         bot.send_message(user_id, "❌ Значение должно быть числом")
         return
     
-    target_id = resolve_target(target_username, create_if_not_exists=True)
+    target_id = resolve_target(target_username)
     if not target_id:
         bot.send_message(user_id, "❌ Пользователь не найден")
         return
@@ -1676,7 +1687,7 @@ def add_admin(message):
         return
     
     target_username = args[1]
-    target_id = resolve_target(target_username, create_if_not_exists=True)
+    target_id = resolve_target(target_username)
     
     if not target_id:
         bot.send_message(user_id, "❌ Пользователь не найден")
@@ -1761,7 +1772,7 @@ def add_vip(message):
         return
     
     target_username = args[1]
-    target_id = resolve_target(target_username, create_if_not_exists=True)
+    target_id = resolve_target(target_username)
     
     if not target_id:
         bot.send_message(user_id, "❌ Пользователь не найден")
@@ -1842,8 +1853,8 @@ def vipinfo(message):
     text += f"ID: {target_id}\n\n"
     
     if target.get("vip_until"):
-        until = datetime.fromisoformat(target["vip_until"]) - timedelta(hours=3)
-        if datetime.now() < until:
+        until = parse_date(target["vip_until"])
+        if until and datetime.now() < until:
             left = until - datetime.now()
             text += f"Статус: ✅ активен\n"
             text += f"До: {(until + timedelta(hours=3)).strftime('%d.%m.%Y %H:%M')}\n"
@@ -1921,7 +1932,7 @@ def add_verified(message):
         return
     
     target_username = args[1]
-    target_id = resolve_target(target_username, create_if_not_exists=True)
+    target_id = resolve_target(target_username)
     
     if not target_id:
         bot.send_message(user_id, "❌ Пользователь не найден")
@@ -2159,21 +2170,25 @@ def profile(message):
     
     vip_info = ""
     if target.get("vip_until"):
-        until = datetime.fromisoformat(target["vip_until"]) - timedelta(hours=3)
-        if until > datetime.now():
+        until = parse_date(target["vip_until"])
+        if until and until > datetime.now():
             left = until - datetime.now()
             vip_info = f"\nVIP до: {(until + timedelta(hours=3)).strftime('%d.%m.%Y')} (осталось {left.days} дн.)"
     
     last_seen = "давно"
     if target.get("last_seen"):
-        last = datetime.fromisoformat(target["last_seen"]) - timedelta(hours=3)
-        delta = datetime.now() - last
-        if delta.days > 0:
-            last_seen = f"{delta.days} дн. назад"
-        elif delta.seconds > 3600:
-            last_seen = f"{delta.seconds//3600} ч. назад"
+        last = parse_date(target["last_seen"])
+        if last:
+            last = last - timedelta(hours=3)
+            delta = datetime.now() - last
+            if delta.days > 0:
+                last_seen = f"{delta.days} дн. назад"
+            elif delta.seconds > 3600:
+                last_seen = f"{delta.seconds//3600} ч. назад"
+            else:
+                last_seen = f"{delta.seconds//60} мин. назад"
         else:
-            last_seen = f"{delta.seconds//60} мин. назад"
+            last_seen = target["last_seen"]
     
     text = f"""
 👤 <b>ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ</b>
@@ -2215,7 +2230,7 @@ def callback_handler(call):
     
     data_cmd = call.data
     
-    # ===== РЕАКЦИИ НА ПОСТЫ =====
+    # Реакции на посты
     if data_cmd.startswith("like_"):
         post_id = data_cmd.split("_")[1]
         
@@ -2339,23 +2354,7 @@ def callback_handler(call):
         log_admin_action(user_id, "Удалил пост (кнопка)", f"ID {post_id}, у {deleted}")
         return
     
-    # ===== АДМИНКА =====
-    if data_cmd.startswith("admin_") or data_cmd in [
-        "admin_main", "admin_posts_list", "approve_", "reject_", "ban_user_",
-        "interpol_", "admin_vip_list", "admin_verified_list", "admin_admins_list",
-        "admin_bans_list", "admin_stats", "admin_activity", "admin_audit",
-        "admin_search_user", "admin_add_rating_", "admin_add_luck_",
-        "admin_make_vip_", "admin_make_verified_", "admin_ban_",
-        "admin_backup_menu", "admin_backup_save", "admin_backup_load", "admin_backup_list",
-        "admin_groups_list", "admin_add_group", "admin_group_", "admin_group_vip_", "admin_group_remove_"
-    ]:
-        pass
-    else:
-        try:
-            bot.delete_message(user_id, call.message.message_id)
-        except:
-            pass
-    
+    # АДМИНКА
     if data_cmd == "admin_main":
         if not is_admin(user_id):
             return
@@ -2400,7 +2399,6 @@ def callback_handler(call):
         if not is_admin(user_id):
             return
         
-        # Проверяем, является ли пользователь мастер-админом
         if not is_master_admin(user_id):
             bot.answer_callback_query(call.id, "❌ Только главный админ может загружать бэкапы")
             return
@@ -2504,7 +2502,6 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, f"VIP статус {'включён' if not current else 'выключен'}")
             log_admin_action(user_id, "Изменил VIP статус группы", f"ID {chat_id}")
         
-        # Возвращаемся к списку групп
         bot.edit_message_text(
             "👥 <b>УПРАВЛЕНИЕ ГРУППАМИ</b>\n\n"
             "Группы для рассылки:",
@@ -2523,7 +2520,6 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Группа удалена")
             log_admin_action(user_id, "Удалил группу", f"ID {chat_id}")
         
-        # Возвращаемся к списку групп
         bot.edit_message_text(
             "👥 <b>УПРАВЛЕНИЕ ГРУППАМИ</b>\n\n"
             "Группы для рассылки:",
@@ -3119,7 +3115,7 @@ def callback_handler(call):
         )
         log_admin_action(user_id, "Забанил (кнопка)", get_user_display_name(target_id, hide_username=False))
     
-    # ===== ОБЫЧНОЕ МЕНЮ =====
+    # ОБЫЧНОЕ МЕНЮ
     elif data_cmd == "main_menu":
         bot.send_message(
             user_id,
@@ -3347,8 +3343,8 @@ def callback_handler(call):
     
     elif data_cmd == "convert":
         if user.get("last_convert"):
-            last = datetime.fromisoformat(user["last_convert"]) - timedelta(hours=3)
-            if now_msk().date() == (last + timedelta(hours=3)).date():
+            last = parse_date(user["last_convert"])
+            if last and now_msk().date() == (last + timedelta(hours=3)).date():
                 bot.answer_callback_query(call.id, "❌ Уже сегодня!")
                 return
         if user["rating"] < 5.1:
@@ -3377,15 +3373,12 @@ def callback_handler(call):
         inv = user.get("inventory", {})
         sil = ""
         if user.get("silencer_until"):
-            try:
-                until = datetime.fromisoformat(user["silencer_until"]) - timedelta(hours=3)
-                if datetime.now() < until:
-                    sil = f" (активен до {(until + timedelta(hours=3)).strftime('%H:%M')})"
-                else:
-                    user["silencer_until"] = None
-                    save_data(data)
-            except:
+            until = parse_date(user["silencer_until"])
+            if until and datetime.now() < until:
+                sil = f" (активен до {(until + timedelta(hours=3)).strftime('%H:%M')})"
+            else:
                 user["silencer_until"] = None
+                save_data(data)
         
         text = f"""
 🎒 <b>ТВОЙ ИНВЕНТАРЬ</b>
@@ -3620,7 +3613,7 @@ def callback_handler(call):
 📢 <b>ПЛАТНАЯ РЕКЛАМА:</b>
 • 50 ⭐ — обычный пост (250 символов, без мата)
 • 100 ⭐ — любой пост (400 символов, мат разрешён)
-Рассылается ВСЕМ пользователям, а также ВСЕМ группам мгновенно!
+Рассылается ВСЕМ пользователям мгновенно!
 
 После оплаты ты получишь товар в течение 5 минут.
         """
@@ -3641,7 +3634,7 @@ def callback_handler(call):
 📌 <b>Тип:</b> Некоммерческая рассылка
 🚫 <b>Важно:</b> Коммерческие проекты не рекламировать!
 
-📊 <b>Версия бота:</b> 4.3
+📊 <b>Версия бота:</b> 4.4
         """
         bot.send_message(
             user_id,
@@ -3706,7 +3699,7 @@ def receive_post(message, post_type="user"):
         "username": user.get("username"),
         "text": text,
         "time": format_msk_time(datetime.now()),
-        "type": post_type  # user или group
+        "type": post_type
     }
     
     user["last_post_time"] = format_msk_time(datetime.now())
@@ -3903,6 +3896,8 @@ def admin_search_user(message):
         return
     
     query = message.text.strip()
+    bot.send_message(user_id, f"🔍 Ищем: {query}")
+    
     target_id = resolve_target(query)
     
     if not target_id:
@@ -3912,8 +3907,7 @@ def admin_search_user(message):
             f"Возможные причины:\n"
             f"• Пользователь ещё не запускал бота\n"
             f"• Неправильный username\n"
-            f"• Пользователь заблокировал бота\n\n"
-            f"Попробуй найти по ID или попроси пользователя написать /start",
+            f"• Пользователь заблокировал бота",
             parse_mode="HTML",
             reply_markup=admin_main_keyboard()
         )
@@ -3929,21 +3923,25 @@ def admin_search_user(message):
     
     vip_info = ""
     if target.get("vip_until"):
-        until = datetime.fromisoformat(target["vip_until"]) - timedelta(hours=3)
-        if until > datetime.now():
+        until = parse_date(target["vip_until"])
+        if until and until > datetime.now():
             left = until - datetime.now()
             vip_info = f"\nVIP до: {(until + timedelta(hours=3)).strftime('%d.%m.%Y')} (осталось {left.days} дн.)"
     
     last_seen = "давно"
     if target.get("last_seen"):
-        last = datetime.fromisoformat(target["last_seen"]) - timedelta(hours=3)
-        delta = datetime.now() - last
-        if delta.days > 0:
-            last_seen = f"{delta.days} дн. назад"
-        elif delta.seconds > 3600:
-            last_seen = f"{delta.seconds//3600} ч. назад"
+        last = parse_date(target["last_seen"])
+        if last:
+            last = last - timedelta(hours=3)
+            delta = datetime.now() - last
+            if delta.days > 0:
+                last_seen = f"{delta.days} дн. назад"
+            elif delta.seconds > 3600:
+                last_seen = f"{delta.seconds//3600} ч. назад"
+            else:
+                last_seen = f"{delta.seconds//60} мин. назад"
         else:
-            last_seen = f"{delta.seconds//60} мин. назад"
+            last_seen = target["last_seen"]
     
     text = f"""
 👤 <b>ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ</b>
@@ -3972,6 +3970,7 @@ def admin_search_user(message):
         reply_markup=admin_user_profile_keyboard(target_id)
     )
     log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
+
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 
 def background_tasks():
@@ -3983,12 +3982,10 @@ def background_tasks():
         now = now_msk()
         now_utc = datetime.now()
         
-        # Налог раз в сутки (по МСК)
         if not last_tax or now.date() > last_tax.date():
             apply_rating_tax()
             last_tax = now
         
-        # Сброс активности в субботу (по МСК)
         if now.weekday() == 5 and (not last_reset or last_reset.date() != now.date()):
             for u in data["users"].values():
                 u["weekly_activity"] = 0
@@ -4001,11 +3998,27 @@ def background_tasks():
         if now_utc.minute % 5 == 0:
             save_data(data)
 
+# ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
+import socket
+import sys
+
+def check_if_already_running():
+    """Проверяет, не запущен ли уже бот"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("localhost", 9999))
+    except socket.error:
+        print("❌ Бот уже запущен! Завершаю работу...")
+        sys.exit(1)
+    sock.close()
+
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
+    check_if_already_running()
+    
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v4.3")
+    print("     LowHigh v4.4")
     print("="*50)
     print(f"{Colors.END}")
     
@@ -4019,10 +4032,20 @@ if __name__ == "__main__":
     
     threading.Thread(target=background_tasks, daemon=True).start()
     
+    retry_count = 0
     while True:
         try:
             bot.infinity_polling()
         except Exception as e:
-            print_log("ERROR", f"Критическая ошибка: {e}")
-            print_log("INFO", "Перезапуск через 10 секунд...")
-            time.sleep(10)
+            print_log("ERROR", f"Ошибка: {e}")
+            
+            if "409" in str(e):
+                print_log("ERROR", "❌ КОНФЛИКТ: Бот уже запущен в другом месте!")
+                print_log("INFO", "Останови другой экземпляр бота и перезапусти этот.")
+                break
+            else:
+                retry_count += 1
+                wait_time = min(30, 5 * retry_count)
+                print_log("INFO", f"Перезапуск через {wait_time} сек... (попытка {retry_count})")
+                time.sleep(wait_time)
+                print("123")
