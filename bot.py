@@ -233,7 +233,6 @@ def get_user(user_id):
     return data["users"][user_id]
 
 def resolve_target(target, create_if_not_exists=False):
-def resolve_target(target, create_if_not_exists=False):
     """Преобразует @username или ID в ID пользователя (ТОЛЬКО по базе данных)"""
     if target.startswith("@"):
         username = target[1:].lower()
