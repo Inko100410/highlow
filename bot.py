@@ -1189,7 +1189,9 @@ def safe_merge_data(old_data, new_data):
 def receive_backup_file(message):
     user_id = message.from_user.id
     
-    if not is_backup_allowed(user_id):
+    # ПРЯМАЯ ПРОВЕРКА НА АДМИНА
+    if str(user_id) not in data.get("admins", []) and str(user_id) not in [str(a) for a in MASTER_ADMINS]:
+        bot.send_message(user_id, "🚫 Только для администраторов бота")
         return
     
     if message.document:
