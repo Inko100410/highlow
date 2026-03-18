@@ -12,7 +12,7 @@ import re
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
 MASTER_ADMINS = [6656110482, 8525294722]  # только твой ID и подруги
-OWNER_USERNAME = "@nickelium"
+OWNER_USERNAME = "nickelium"
 MASTER_BACKUP = [6656110482]  # только ты можешь делать бэкапы
 
 # Путь для базы данных
