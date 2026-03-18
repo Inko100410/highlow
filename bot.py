@@ -1,6 +1,6 @@
-# LowHigh v4.2 — ФИНАЛЬНАЯ ВЕРСИЯ
+# LowHigh v5.0 — ФИНАЛЬНАЯ ВЕРСИЯ С ГРУППАМИ
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 import random
 import time
 import json
@@ -11,8 +11,9 @@ import re
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
-MASTER_ADMINS = [6656110482, 8525294722]
+MASTER_ADMINS = [6656110482, 8525294722]  # только твой ID и подруги
 OWNER_USERNAME = "@nickelium"
+MASTER_BACKUP = [6656110482]  # только ты можешь делать бэкапы
 
 # Путь для базы данных
 DATA_FILE = "bot_data.json"
@@ -45,7 +46,7 @@ class Colors:
     BOLD = '\033[1m'
 
 def print_log(level, message):
-    timestamp = format_msk_time(datetime.now())[11:16]  # только часы:минуты
+    timestamp = format_msk_time(datetime.now())[11:16]
     if level == "INFO":
         print(f"{Colors.BLUE}[{timestamp}][INFO]{Colors.END} {message}")
     elif level == "SUCCESS":
@@ -60,12 +61,16 @@ def print_log(level, message):
         print(f"{Colors.BOLD}[{timestamp}][🎰]{Colors.END} {message}")
     elif level == "ADMIN":
         print(f"{Colors.BOLD}{Colors.RED}[{timestamp}][👑]{Colors.END} {message}")
+    elif level == "GROUP":
+        print(f"{Colors.BOLD}{Colors.GREEN}[{timestamp}][👥]{Colors.END} {message}")
+    elif level == "TAX":
+        print(f"{Colors.BOLD}{Colors.YELLOW}[{timestamp}][💰]{Colors.END} {message}")
 
 # ========== АУДИТ ДЕЙСТВИЙ ==========
 audit_log = []
 
 def log_admin_action(admin_id, action, details=""):
-    admin_name = get_user_display_name(admin_id)
+    admin_name = get_user_display_name(admin_id, hide_username=False)
     entry = {
         "time": format_msk_time(datetime.now()),
         "admin_id": admin_id,
@@ -108,7 +113,7 @@ def load_data():
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                print_log("INFO", f"Загружено {len(data.get('users', {}))} пользователей")
+                print_log("INFO", f"Загружено {len(data.get('users', {}))} пользователей, {len(data.get('groups', {}))} групп")
                 return data
         except Exception as e:
             print_log("ERROR", f"Основной файл повреждён: {e}")
@@ -127,6 +132,7 @@ def load_data():
     
     return {
         "users": {},
+        "groups": {},  # добавлено для групп
         "posts": [],
         "banned_users": [],
         "admins": MASTER_ADMINS.copy(),
@@ -208,13 +214,59 @@ def get_user(user_id):
     
     return data["users"][user_id]
 
+# ========== РАБОТА С ГРУППАМИ ==========
+
+def get_group(chat_id):
+    """Получает или создаёт группу"""
+    chat_id = str(chat_id)
+    
+    if chat_id not in data["groups"]:
+        data["groups"][chat_id] = {
+            "title": None,
+            "members_count": 0,
+            "join_date": format_msk_time(datetime.now()),
+            "last_activity": format_msk_time(datetime.now()),
+            "owner_id": None,
+            "admins": [],  # админы группы
+            "vip": False,  # есть ли у владельца VIP
+            "stats": {
+                "posts_sent": 0,
+                "posts_received": 0
+            }
+        }
+        print_log("GROUP", f"Новая группа! ID: {chat_id}")
+        save_data(data)
+    
+    return data["groups"][chat_id]
+
+def update_group_info(chat):
+    """Обновляет информацию о группе"""
+    chat_id = str(chat.id)
+    group = get_group(chat_id)
+    group["title"] = chat.title
+    try:
+        group["members_count"] = bot.get_chat_members_count(chat_id)
+    except:
+        pass
+    group["last_activity"] = format_msk_time(datetime.now())
+    save_data(data)
+    return group
+
+def is_group_admin(chat_id, user_id):
+    """Проверяет, является ли пользователь админом группы"""
+    try:
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ['administrator', 'creator']
+    except:
+        return False
+
 def resolve_target(target, create_if_not_exists=False):
     """Преобразует @username или ID в ID пользователя (с автосозданием)"""
     if target.startswith("@"):
-        username = target[1:]
-        # Ищем по юзернейму
+        username = target[1:].lower()  # приводим к нижнему регистру
+        # Ищем по юзернейму (без учёта регистра)
         for uid, user in data["users"].items():
-            if user.get("username") and user["username"].lower() == username.lower():
+            if user.get("username") and user["username"].lower() == username:
                 return uid
         
         # Если не нашли и нужно создать
@@ -231,7 +283,8 @@ def resolve_target(target, create_if_not_exists=False):
                 user["first_name"] = chat.first_name
                 save_data(data)
                 return uid
-            except:
+            except Exception as e:
+                print_log("ERROR", f"Не удалось найти пользователя {target}: {e}")
                 return None
     
     try:
@@ -247,7 +300,7 @@ def resolve_target(target, create_if_not_exists=False):
     return None
 
 def get_user_display_name(user_id, hide_username=True):
-    """Возвращает имя пользователя для отображения (без @ если hide_username=True)"""
+    """Возвращает имя пользователя для отображения"""
     user_id = str(user_id)
     user = data["users"].get(user_id)
     if not user:
@@ -257,7 +310,7 @@ def get_user_display_name(user_id, hide_username=True):
         if user.get("first_name"):
             return user["first_name"]
         if user.get("username"):
-            return user["username"]  # без @
+            return user["username"]
         try:
             chat = bot.get_chat(int(user_id))
             name = chat.first_name or "Аноним"
@@ -325,7 +378,7 @@ def check_post_cooldown(user):
     if not user["last_post_time"]:
         return True, 0
     
-    last = datetime.fromisoformat(user["last_post_time"]) - timedelta(hours=3)  # конвертируем обратно в UTC
+    last = datetime.fromisoformat(user["last_post_time"]) - timedelta(hours=3)
     cooldown_hours = get_post_cooldown(user)
     next_time = last + timedelta(hours=cooldown_hours)
     now = datetime.now()
@@ -393,6 +446,10 @@ def is_admin(user_id):
 def is_master_admin(user_id):
     return str(user_id) in [str(a) for a in MASTER_ADMINS]
 
+def is_backup_allowed(user_id):
+    """Только мастер-админ может делать бэкапы"""
+    return str(user_id) in [str(a) for a in MASTER_BACKUP]
+
 def is_vip(user_id):
     user_id = str(user_id)
     user = data["users"].get(user_id)
@@ -439,6 +496,9 @@ WELCOME_TEXT = """
 
 <b>📞 Горячая линия:</b>
 Связь с админами (раз в час)
+
+<b>👥 Группы:</b>
+Бота можно добавить в группы для кросс-постинга!
 
 Погнали! 👇
 """
@@ -626,6 +686,88 @@ def send_post_to_users(post, admin_id, force_all=False):
     save_data(data)
     return sent
 
+def send_post_to_groups(post, admin_id):
+    """Рассылка по группам (только для админов)"""
+    from_user_id = post["user_id"]
+    author = get_user(from_user_id)
+    
+    if not author:
+        print_log("ERROR", f"Автор {from_user_id} не найден")
+        return 0
+    
+    if not data["groups"]:
+        try:
+            bot.send_message(int(from_user_id), "😢 Нет групп для рассылки")
+        except:
+            pass
+        return 0
+    
+    # Определяем шанс доставки в зависимости от VIP автора
+    base_chance = 5 if is_vip(from_user_id) else 1
+    guaranteed_min = max(1, int(len(data["groups"]) * 0.01))  # минимум 1 группа или 1%
+    
+    all_groups = list(data["groups"].items())
+    random.shuffle(all_groups)
+    
+    guaranteed_groups = all_groups[:guaranteed_min]
+    chance_groups = all_groups[guaranteed_min:]
+    
+    sent = 0
+    post_id = post["id"]
+    
+    # Сохраняем содержимое поста
+    data["post_contents"][str(post_id)] = {
+        "text": post["text"],
+        "author_id": from_user_id,
+        "author_name": get_user_display_name(from_user_id, hide_username=False),
+        "type": "group"
+    }
+    
+    # Гарантированная часть
+    for gid, group_data in guaranteed_groups:
+        try:
+            bot.send_message(
+                int(gid),
+                f"📢 <b>Пост для групп</b> от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{post['text']}"
+            )
+            sent += 1
+            group_data["stats"]["posts_received"] = group_data["stats"].get("posts_received", 0) + 1
+            print_log("GROUP", f"Пост доставлен в группу {group_data.get('title', gid)} (гарантия)")
+        except Exception as e:
+            print_log("ERROR", f"Ошибка отправки в группу {gid}: {e}")
+    
+    # По шансу
+    chance_hits = 0
+    for gid, group_data in chance_groups:
+        if random.uniform(0, 100) <= base_chance:
+            try:
+                bot.send_message(
+                    int(gid),
+                    f"📢 <b>Пост для групп</b> от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{post['text']}"
+                )
+                sent += 1
+                chance_hits += 1
+                group_data["stats"]["posts_received"] = group_data["stats"].get("posts_received", 0) + 1
+            except Exception as e:
+                print_log("ERROR", f"Ошибка отправки в группу {gid}: {e}")
+    
+    print_log("GROUP", f"✅ Пост доставлен в {sent}/{len(data['groups'])} групп (гарантия: {guaranteed_min}, шанс: {chance_hits})")
+    
+    try:
+        bot.send_message(
+            int(from_user_id),
+            f"✅ <b>Твой пост разослан по группам!</b>\n\n"
+            f"👥 Всего групп: {len(data['groups'])}\n"
+            f"✅ Доставлено: {sent}\n"
+            f"🎯 Гарантированно: {guaranteed_min}\n"
+            f"🎲 По шансу ({base_chance}%): {chance_hits}",
+            parse_mode="HTML"
+        )
+    except:
+        pass
+    
+    return sent
+
 def delete_post_globally(post_id):
     pid = str(post_id)
     if pid not in data["post_history"]:
@@ -663,13 +805,13 @@ def update_post_reactions_buttons(post_id, chat_id, message_id):
     except:
         pass
 
-# ========== ТОП-10 (БЕЗ АДМИНОВ, НО С ВИП/ВЕРИФ) ==========
+# ========== ТОП-10 ==========
 
 def get_top_users():
     users = []
     for uid, u in data["users"].items():
-        if uid not in data["banned_users"] and not is_admin(uid):  # админов исключаем, VIP и вериф оставляем
-            name = get_user_display_name(uid, hide_username=True)  # только имя, без @
+        if uid not in data["banned_users"] and not is_admin(uid):
+            name = get_user_display_name(uid, hide_username=True)
             users.append({
                 "id": uid,
                 "name": name,
@@ -782,10 +924,13 @@ def update_quest_progress(user_id, qtype, value=1, extra=None):
 def apply_rating_tax():
     """Снимает 1% рейтинга у всех (по МСК)"""
     taxed = 0
+    notified = 0
+    
     for uid, user in data["users"].items():
         if uid in data["banned_users"]:
             continue
         
+        old_rating = user["rating"]
         user["rating"] -= 1.0
         
         if is_vip(uid) or is_verified(uid):
@@ -794,9 +939,24 @@ def apply_rating_tax():
             user["rating"] = max(5.0, user["rating"])
         
         taxed += 1
+        
+        # Уведомление о налоге (только если рейтинг изменился)
+        if old_rating != user["rating"] and user.get("admin_notifications", True):
+            try:
+                bot.send_message(
+                    int(uid),
+                    f"💰 <b>Ежедневный налог</b>\n\n"
+                    f"Снят 1% рейтинга.\n"
+                    f"Твой рейтинг: {old_rating:.1f}% → {user['rating']:.1f}%\n\n"
+                    f"Чтобы рейтинг не падал, пиши посты и получай лайки!",
+                    parse_mode="HTML"
+                )
+                notified += 1
+            except:
+                pass
     
     save_data(data)
-    print_log("INFO", f"Налог: снят 1% у {taxed} пользователей")
+    print_log("TAX", f"Снят 1% у {taxed} пользователей, уведомлено {notified}")
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -835,6 +995,7 @@ def admin_main_keyboard():
     markup.add(
         InlineKeyboardButton("📝 Посты на модерации", callback_data="admin_posts_list"),
         InlineKeyboardButton("📢 Интерпол-рассылка", callback_data="admin_interpol"),
+        InlineKeyboardButton("👥 Групповая рассылка", callback_data="admin_group_post"),
         InlineKeyboardButton("👑 VIP управление", callback_data="admin_vip_list"),
         InlineKeyboardButton("✅ Вериф управление", callback_data="admin_verified_list"),
         InlineKeyboardButton("👥 Админы", callback_data="admin_admins_list"),
@@ -942,14 +1103,14 @@ def history_post_actions_keyboard(post_id):
     )
     return markup
 
-# ========== БЭКАПЫ ==========
+# ========== БЭКАПЫ (ТОЛЬКО ДЛЯ МАСТЕРА) ==========
 
 @bot.message_handler(commands=['backupsave'])
 def backup_save(message):
     user_id = message.from_user.id
     
-    if not is_admin(user_id):
-        bot.send_message(user_id, "🚫 Только для админов")
+    if not is_backup_allowed(user_id):
+        bot.send_message(user_id, "🚫 Только для владельца бота")
         return
     
     try:
@@ -968,8 +1129,8 @@ def backup_save(message):
 def backup_upload_start(message):
     user_id = message.from_user.id
     
-    if not is_admin(user_id):
-        bot.send_message(user_id, "🚫 Только для админов")
+    if not is_backup_allowed(user_id):
+        bot.send_message(user_id, "🚫 Только для владельца бота")
         return
     
     msg = bot.send_message(
@@ -979,10 +1140,60 @@ def backup_upload_start(message):
     )
     bot.register_next_step_handler(msg, receive_backup_file)
 
+def safe_merge_data(old_data, new_data):
+    """Безопасно объединяет старую и новую структуру данных"""
+    merged = old_data.copy()
+    
+    # Копируем пользователей
+    if "users" in new_data:
+        merged["users"] = new_data["users"]
+    
+    # Копируем группы
+    if "groups" in new_data:
+        merged["groups"] = new_data["groups"]
+    else:
+        merged["groups"] = {}
+    
+    # Копируем посты
+    if "posts" in new_data:
+        merged["posts"] = new_data["posts"]
+    
+    # Копируем баны
+    if "banned_users" in new_data:
+        merged["banned_users"] = new_data["banned_users"]
+    
+    # Копируем админов (но мастер-админы защищены)
+    if "admins" in new_data:
+        merged["admins"] = list(set(new_data["admins"] + MASTER_ADMINS))
+    
+    # Копируем VIP
+    if "vip_users" in new_data:
+        merged["vip_users"] = new_data["vip_users"]
+    
+    # Копируем верифицированных
+    if "verified_users" in new_data:
+        merged["verified_users"] = new_data["verified_users"]
+    
+    # Копируем статистику
+    if "stats" in new_data:
+        merged["stats"] = new_data["stats"]
+    
+    # Копируем историю постов
+    if "post_history" in new_data:
+        merged["post_history"] = new_data["post_history"]
+    
+    if "post_contents" in new_data:
+        merged["post_contents"] = new_data["post_contents"]
+    
+    if "post_reactions" in new_data:
+        merged["post_reactions"] = new_data["post_reactions"]
+    
+    return merged
+
 def receive_backup_file(message):
     user_id = message.from_user.id
     
-    if not is_admin(user_id):
+    if not is_backup_allowed(user_id):
         return
     
     if message.document:
@@ -1001,20 +1212,23 @@ def receive_backup_file(message):
                 bot.send_message(user_id, "❌ Непохоже на файл базы данных")
                 return
             
+            # Делаем бэкап текущей базы
             temp_backup = DATA_FILE + ".pre_restore"
             if os.path.exists(DATA_FILE):
                 os.replace(DATA_FILE, temp_backup)
             
-            with open(DATA_FILE, 'w', encoding='utf-8') as f:
-                json.dump(new_data, f, ensure_ascii=False, indent=2)
-            
+            # Безопасно объединяем данные
             global data
-            data = new_data
+            data = safe_merge_data(data, new_data)
+            
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
             
             bot.send_message(
                 user_id,
                 f"✅ База восстановлена!\n"
                 f"👥 Пользователей: {len(data['users'])}\n"
+                f"👥 Групп: {len(data.get('groups', {}))}\n"
                 f"📝 Постов в очереди: {len(data['posts'])}"
             )
             log_admin_action(user_id, "Восстановил базу из бэкапа")
@@ -1034,6 +1248,14 @@ def receive_backup_file(message):
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
+    
+    if message.chat.type != 'private':
+        # Бота добавили в группу
+        if message.chat.type in ['group', 'supergroup']:
+            group = get_group(message.chat.id)
+            update_group_info(message.chat)
+            bot.reply_to(message, "✅ Бот добавлен в группу! Теперь админы могут делать рассылки по группам.")
+        return
     
     if is_banned(user_id):
         bot.send_message(user_id, "🚫 Вы забанены в этом боте.")
@@ -1277,8 +1499,8 @@ def cmd_help(message):
 /delpost ID - удалить пост у всех
 /restime @user - сбросить КД
 /profile @user - просмотр профиля
-/backupsave - скачать бэкап базы
-/backupload - загрузить бэкап базы
+/backupsave - скачать бэкап базы (только для владельца)
+/backupload - загрузить бэкап базы (только для владельца)
     """
     bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
 
@@ -1318,6 +1540,44 @@ def cmd_convert(message):
     )
 
 # ========== АДМИН-КОМАНДЫ ==========
+
+def resolve_target(target, create_if_not_exists=False):
+    """Преобразует @username или ID в ID пользователя (с автосозданием)"""
+    if target.startswith("@"):
+        username = target[1:].lower()
+        # Ищем по юзернейму (без учёта регистра)
+        for uid, user in data["users"].items():
+            if user.get("username") and user["username"].lower() == username:
+                return uid
+        
+        # Если не нашли и нужно создать
+        if create_if_not_exists:
+            try:
+                # Пробуем получить инфо из Telegram
+                chat = bot.get_chat(username)
+                uid = str(chat.id)
+                # Создаём пользователя
+                get_user(uid)
+                # Обновляем юзернейм
+                user = data["users"][uid]
+                user["username"] = chat.username
+                user["first_name"] = chat.first_name
+                save_data(data)
+                return uid
+            except Exception as e:
+                print_log("ERROR", f"Не удалось найти пользователя {target}: {e}")
+                return None
+    
+    try:
+        uid = str(int(target))
+        if get_user(uid):
+            return uid
+        elif create_if_not_exists:
+            get_user(uid)
+            return uid
+    except:
+        pass
+    return None
 
 @bot.message_handler(commands=['setrating'])
 def set_rating(message):
@@ -2099,7 +2359,8 @@ def callback_handler(call):
         "admin_bans_list", "admin_stats", "admin_activity", "admin_audit",
         "admin_search_user", "admin_add_rating_", "admin_add_luck_",
         "admin_make_vip_", "admin_make_verified_", "admin_ban_",
-        "admin_backup_menu", "admin_backup_save", "admin_backup_load", "admin_backup_list"
+        "admin_backup_menu", "admin_backup_save", "admin_backup_load", "admin_backup_list",
+        "admin_group_post"
     ]:
         pass
     else:
@@ -2119,6 +2380,21 @@ def callback_handler(call):
             reply_markup=admin_main_keyboard()
         )
     
+    elif data_cmd == "admin_group_post":
+        if not is_admin(user_id):
+            return
+        
+        bot.edit_message_text(
+            "👥 <b>ГРУППОВАЯ РАССЫЛКА</b>\n\n"
+            "Отправь текст поста для рассылки по группам.\n"
+            f"Всего групп: {len(data.get('groups', {}))}\n"
+            f"Шанс доставки: 1% (5% для VIP)",
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML"
+        )
+        bot.register_next_step_handler_by_chat_id(user_id, receive_group_post)
+    
     elif data_cmd == "admin_backup_menu":
         if not is_admin(user_id):
             return
@@ -2132,7 +2408,8 @@ def callback_handler(call):
         )
     
     elif data_cmd == "admin_backup_save":
-        if not is_admin(user_id):
+        if not is_backup_allowed(user_id):
+            bot.answer_callback_query(call.id, "❌ Только для владельца")
             return
         
         try:
@@ -2149,7 +2426,8 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, f"❌ Ошибка: {e}")
     
     elif data_cmd == "admin_backup_load":
-        if not is_admin(user_id):
+        if not is_backup_allowed(user_id):
+            bot.answer_callback_query(call.id, "❌ Только для владельца")
             return
         
         bot.edit_message_text(
@@ -2532,6 +2810,7 @@ def callback_handler(call):
         total_users = len(data["users"])
         total_banned = len(data["banned_users"])
         total_admins = len(data.get("admins", []))
+        total_groups = len(data.get("groups", {}))
         
         vip_cnt = 0
         for uid, u in data["users"].items():
@@ -2550,6 +2829,7 @@ def callback_handler(call):
 📊 <b>СТАТИСТИКА БОТА</b>
 
 👥 Всего пользователей: {total_users}
+👥 Групп: {total_groups}
 🚫 Забанено: {total_banned}
 👑 VIP: {vip_cnt}
 ✅ Верифицировано: {ver_cnt}
@@ -3194,7 +3474,7 @@ def callback_handler(call):
         user["total_posts"] += 1
         save_data(data)
         
-        total_users = len(data["users"]) - 1  # минус сам автор
+        total_users = len(data["users"]) - 1
         percent = (sent / total_users * 100) if total_users > 0 else 0
         
         bot.send_message(
@@ -3268,7 +3548,7 @@ def callback_handler(call):
 📌 <b>Тип:</b> Некоммерческая рассылка
 🚫 <b>Важно:</b> Коммерческие проекты не рекламировать!
 
-📊 <b>Версия бота:</b> 4.2
+📊 <b>Версия бота:</b> 5.0
         """
         bot.send_message(
             user_id,
@@ -3378,6 +3658,48 @@ def receive_post(message):
                         )
                     except:
                         pass
+
+def receive_group_post(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if message.content_type != 'text':
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст!",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+    
+    if not data.get("groups"):
+        bot.send_message(
+            user_id,
+            "😢 Нет групп для рассылки",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+    
+    text = message.text
+    
+    post = {
+        "id": int(time.time() * 1000),
+        "user_id": str(user_id),
+        "username": user.get("username"),
+        "text": text,
+        "time": format_msk_time(datetime.now())
+    }
+    
+    sent = send_post_to_groups(post, user_id)
+    
+    bot.send_message(
+        user_id,
+        f"👥 <b>Групповая рассылка выполнена!</b>\n\n✅ Доставлено в {sent} групп",
+        parse_mode="HTML",
+        reply_markup=admin_main_keyboard()
+    )
+    log_admin_action(user_id, "Групповая рассылка", f"доставлено в {sent} групп")
 
 def receive_reject_reason(message, post_data, post_index):
     user_id = message.from_user.id
@@ -3578,6 +3900,18 @@ def admin_search_user(message):
     )
     log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
 
+# ========== ОБРАБОТЧИК ДОБАВЛЕНИЯ В ГРУППУ ==========
+
+@bot.my_chat_member_handler()
+def handle_group_join(update: ChatMemberUpdated):
+    if update.new_chat_member.status in ['member', 'administrator']:
+        # Бота добавили в группу
+        chat = update.chat
+        if chat.type in ['group', 'supergroup']:
+            group = get_group(chat.id)
+            update_group_info(chat)
+            print_log("GROUP", f"Бот добавлен в группу {chat.title} (ID: {chat.id})")
+
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 
 def background_tasks():
@@ -3611,13 +3945,15 @@ def background_tasks():
 if __name__ == "__main__":
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v4.2")
+    print("     LowHigh v5.0")
     print("="*50)
     print(f"{Colors.END}")
     
     print_log("INFO", f"Мастер-админы: {MASTER_ADMINS}")
+    print_log("INFO", f"Мастер-бэкапов: {MASTER_BACKUP}")
     print_log("INFO", f"Всего админов: {len(data.get('admins', []))}")
     print_log("INFO", f"Всего юзеров: {len(data['users'])}")
+    print_log("INFO", f"Всего групп: {len(data.get('groups', {}))}")
     print_log("INFO", f"Постов в очереди: {len(data['posts'])}")
     print_log("INFO", f"Файл базы: {DATA_FILE}")
     print_log("INFO", "Бот запущен...")
