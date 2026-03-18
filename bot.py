@@ -1105,26 +1105,22 @@ def history_post_actions_keyboard(post_id):
 
 # ========== БЭКАПЫ (ТОЛЬКО ДЛЯ МАСТЕРА) ==========
 
-@bot.message_handler(commands=['backupsave'])
-def backup_save(message):
+@bot.message_handler(commands=['backupload'])
+def backup_upload_start(message):
     user_id = message.from_user.id
     
-    if not is_backup_allowed(user_id):
-        bot.send_message(user_id, "🚫 Только для владельца бота")
+    # ПРЯМАЯ ПРОВЕРКА НА АДМИНА
+    if str(user_id) not in data.get("admins", []) and str(user_id) not in [str(a) for a in MASTER_ADMINS]:
+        bot.send_message(user_id, "🚫 Только для администраторов бота")
         return
     
-    try:
-        with open(DATA_FILE, 'rb') as f:
-            bot.send_document(
-                user_id, 
-                f, 
-                visible_file_name=f'backup_{now_msk().strftime("%Y%m%d_%H%M%S")}.json',
-                caption="✅ Бэкап базы данных"
-            )
-        log_admin_action(user_id, "Скачал бэкап")
-    except Exception as e:
-        bot.send_message(user_id, f"❌ Ошибка: {e}")
-
+    msg = bot.send_message(
+        user_id,
+        "📤 Отправь мне JSON-файл с бэкапом.\n"
+        "❗ После загрузки текущие данные будут ЗАМЕНЕНЫ."
+    )
+    bot.register_next_step_handler(msg, receive_backup_file)
+    
 @bot.message_handler(commands=['backupload'])
 def backup_upload_start(message):
     user_id = message.from_user.id
