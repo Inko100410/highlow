@@ -3275,36 +3275,6 @@ ID поста: {post_id}
                 )
             )
     
-    elif data_cmd == "admin_maintenance_confirm":
-        if not is_admin(user_id):
-            return
-        
-        global maintenance_mode
-        maintenance_mode = True
-        
-        bot.edit_message_text(
-            "🔧 РЕЖИМ ТЕХНИЧЕСКИХ РАБОТ ВКЛЮЧЕН!\n\n"
-            "Все пользователи (кроме админов) видят сообщение о недоступности бота.\n"
-            "Чтобы выключить режим, нажмите кнопку снова.",
-            user_id,
-            call.message.message_id,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("🔧 Выключить тех. работы", callback_data="admin_maintenance")
-            )
-        )
-        log_admin_action(user_id, "Включил режим тех. работ")
-        
-        for uid in data["users"].keys():
-            if uid not in data["banned_users"] and not is_admin(uid):
-                try:
-                    bot.send_message(
-                        int(uid),
-                        "🔧 Технические работы! Бот временно недоступен.\n\nПопробуйте зайти позже."
-                    )
-                except:
-                    pass
-    
     # АДМИНКА
     elif data_cmd == "admin_main":
         if not is_admin(user_id):
