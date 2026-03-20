@@ -3230,10 +3230,12 @@ ID поста: {post_id}
     
     # Режим тех. работ
     elif data_cmd == "admin_maintenance":
+
+        global maintenance_mode
+        
         if not is_admin(user_id):
             return
         
-        global maintenance_mode
         if maintenance_mode:
             maintenance_mode = False
             bot.edit_message_text(
