@@ -3228,53 +3228,6 @@ ID поста: {post_id}
         )
         log_admin_action(user_id, "Выдал VIP всем с бонусом", f"{count} пользователей, бонус: {bonus_name}")
     
-    # Режим тех. работ
-    elif data_cmd == "admin_maintenance":
-
-        global maintenance_mode
-        
-        if not is_admin(user_id):
-            return
-        
-        if maintenance_mode:
-            maintenance_mode = False
-            bot.edit_message_text(
-                "✅ Режим технических работ ВЫКЛЮЧЕН!\n\n"
-                "Бот снова доступен для всех пользователей.",
-                user_id,
-                call.message.message_id,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_main")
-                )
-            )
-            log_admin_action(user_id, "Выключил режим тех. работ")
-            
-            for uid in data["users"].keys():
-                if uid not in data["banned_users"]:
-                    try:
-                        bot.send_message(
-                            int(uid),
-                            "✅ Режим технических работ завершён!\n\nБот снова доступен для всех пользователей."
-                        )
-                    except:
-                        pass
-        else:
-            bot.edit_message_text(
-                "🔧 РЕЖИМ ТЕХНИЧЕСКИХ РАБОТ\n\n"
-                "Включить режим тех. работ?\n\n"
-                "⚠️ Все пользователи (кроме админов) получат сообщение о недоступности бота.\n"
-                "⚠️ Рассылка постов будет приостановлена.\n"
-                "⚠️ Администраторы смогут работать в панели.",
-                user_id,
-                call.message.message_id,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(row_width=2).add(
-                    InlineKeyboardButton("✅ ВКЛЮЧИТЬ", callback_data="admin_maintenance_confirm"),
-                    InlineKeyboardButton("❌ ОТМЕНА", callback_data="admin_main")
-                )
-            )
-    
     # АДМИНКА
     elif data_cmd == "admin_main":
         if not is_admin(user_id):
