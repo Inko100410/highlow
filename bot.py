@@ -13,31 +13,26 @@ import sys
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
-MASTER_ADMINS = [6656110482, 8525294722, 7760222795, 6618330805]  # Главные админы
+MASTER_ADMINS = [6656110482, 8525294722, 7760222795, 6618330805]
 OWNER_USERNAME = "@nickelium"
 
-# Путь для базы данных
 DATA_FILE = "bot_data.json"
 
 bot = telebot.TeleBot(TOKEN)
 
 # ========== ВРЕМЯ (UTC+3 МСК) ==========
 def msk_time(dt=None):
-    """Конвертирует время в UTC+3 (МСК)"""
     if dt is None:
         dt = datetime.now()
     return dt + timedelta(hours=3)
 
 def format_msk_time(dt):
-    """Форматирует время в МСК (ДД.ММ.ГГГГ ЧЧ:ММ)"""
     return msk_time(dt).strftime("%d.%m.%Y %H:%M")
 
 def now_msk():
-    """Текущее время по МСК"""
     return msk_time()
 
 def parse_date(date_str):
-    """Безопасный парсинг даты из строки ДД.ММ.ГГГГ ЧЧ:ММ или ISO"""
     if not date_str:
         return None
     try:
@@ -70,14 +65,10 @@ def print_log(level, message):
         print(f"{Colors.RED}[{timestamp}][✗]{Colors.END} {message}")
     elif level == "POST":
         print(f"{Colors.HEADER}[{timestamp}][📢]{Colors.END} {message}")
-    elif level == "CASINO":
-        print(f"{Colors.BOLD}[{timestamp}][🎰]{Colors.END} {message}")
     elif level == "ADMIN":
         print(f"{Colors.BOLD}{Colors.RED}[{timestamp}][👑]{Colors.END} {message}")
-    elif level == "TAX":
-        print(f"{Colors.YELLOW}[{timestamp}][💰]{Colors.END} {message}")
 
-# ========== АУДИТ ДЕЙСТВИЙ ==========
+# ========== АУДИТ ==========
 audit_log = []
 
 def log_admin_action(admin_id, action, details=""):
@@ -158,9 +149,7 @@ def load_data():
             "daily_stats": {}
         },
         "post_reactions": {},
-        "global_reactions": {},
-        "pending_notifications": {},
-        "deleted_users_log": []  # Лог удаленных пользователей
+        "deleted_users_log": []
     }
 
 data = load_data()
@@ -205,7 +194,7 @@ def get_user(user_id):
             "my_posts": [],
             "post_history_data": {},
             "last_post_notification_sent": False,
-            "last_activity": now_msk()  # Для отслеживания активности
+            "last_activity": now_msk()
         }
         today = now_msk().strftime("%Y-%m-%d")
         if "daily_stats" not in data["stats"]:
@@ -231,7 +220,6 @@ def get_user(user_id):
     return data["users"][user_id]
 
 def find_user_by_username(username):
-    """Ищет пользователя по username (без @)"""
     if not username:
         return None
     
@@ -245,19 +233,12 @@ def find_user_by_username(username):
             return uid
     return None
 
-def find_user_by_id(uid):
-    """Проверяет существование пользователя по ID"""
-    uid = str(uid)
-    return uid if uid in data["users"] else None
-
 def resolve_target(target):
-    """Поиск пользователя по ID или @username"""
     if not target:
         return None
     
     target = target.strip()
     
-    # Поиск по ID
     try:
         uid = str(int(target))
         if uid in data["users"]:
@@ -265,11 +246,9 @@ def resolve_target(target):
     except:
         pass
     
-    # Поиск по @username
     if target.startswith('@'):
         return find_user_by_username(target[1:])
     
-    # Поиск по username без @
     uid = find_user_by_username(target)
     if uid:
         return uid
@@ -277,7 +256,6 @@ def resolve_target(target):
     return None
 
 def get_user_display_name(user_id, hide_username=True):
-    """Возвращает имя пользователя для отображения"""
     user_id = str(user_id)
     user = data["users"].get(user_id)
     if not user:
@@ -297,7 +275,6 @@ def get_user_display_name(user_id, hide_username=True):
         return f"User_{user_id[-4:]}"
 
 def get_user_status_emoji(user_id):
-    user_id = str(user_id)
     if is_vip(user_id):
         return "👑"
     elif is_verified(user_id):
@@ -306,7 +283,6 @@ def get_user_status_emoji(user_id):
         return "📝"
 
 def get_max_referrals(user_id):
-    user_id = str(user_id)
     if is_vip(user_id):
         return 50
     elif is_verified(user_id):
@@ -315,8 +291,6 @@ def get_max_referrals(user_id):
         return 10
 
 def get_post_cooldown(user_id):
-    user_id = str(user_id)
-    
     if is_vip(user_id):
         return 2
     
@@ -368,7 +342,6 @@ def check_hotline_cooldown(user):
     return False, (next_time - now).total_seconds()
 
 def get_max_post_length(user_id):
-    user_id = str(user_id)
     if is_vip(user_id):
         return 500
     elif is_verified(user_id):
@@ -405,9 +378,8 @@ def check_and_fix_rating(user_id):
         return True
     return False
 
-# ========== VIP ВСЕМ НА СУТКИ ==========
+# ========== VIP ВСЕМ ==========
 def give_vip_to_all(days=1):
-    """Выдаёт VIP всем пользователям на указанное количество дней"""
     count = 0
     until = now_msk() + timedelta(days=days)
     until_str = format_msk_time(until)
@@ -420,7 +392,6 @@ def give_vip_to_all(days=1):
         check_and_fix_rating(uid)
         count += 1
         
-        # Уведомляем пользователя
         try:
             bot.send_message(
                 int(uid),
@@ -444,7 +415,6 @@ def give_vip_to_all(days=1):
 # ========== РАБОТА С ГРУППАМИ ==========
 
 def add_group(chat_id, title, added_by):
-    """Добавляет группу в базу"""
     chat_id = str(chat_id)
     if "groups" not in data:
         data["groups"] = {}
@@ -456,14 +426,13 @@ def add_group(chat_id, title, added_by):
             "added_date": format_msk_time(datetime.now()),
             "owner_vip": False,
             "total_posts": 0,
-            "group_admins": []  # Список админов группы
+            "group_admins": []
         }
         save_data(data)
         return True
     return False
 
 def remove_group(chat_id):
-    """Удаляет группу из базы"""
     chat_id = str(chat_id)
     if "groups" in data and chat_id in data["groups"]:
         del data["groups"][chat_id]
@@ -472,7 +441,6 @@ def remove_group(chat_id):
     return False
 
 def set_group_owner_vip(chat_id, is_vip):
-    """Устанавливает VIP статус владельца группы"""
     chat_id = str(chat_id)
     if "groups" in data and chat_id in data["groups"]:
         data["groups"][chat_id]["owner_vip"] = is_vip
@@ -481,7 +449,6 @@ def set_group_owner_vip(chat_id, is_vip):
     return False
 
 def is_group_admin(user_id, chat_id):
-    """Проверяет, является ли пользователь администратором в группе"""
     user_id = str(user_id)
     chat_id = str(chat_id)
     
@@ -490,7 +457,6 @@ def is_group_admin(user_id, chat_id):
     return False
 
 def add_group_admin(user_id, chat_id):
-    """Добавляет пользователя в список админов группы"""
     user_id = str(user_id)
     chat_id = str(chat_id)
     
@@ -504,7 +470,6 @@ def add_group_admin(user_id, chat_id):
     return False
 
 def send_group_post(post, admin_id, media=None):
-    """Рассылает пост по группам (с поддержкой картинок)"""
     from_user_id = post["user_id"]
     author = get_user(from_user_id)
     
@@ -608,7 +573,7 @@ def send_group_post(post, admin_id, media=None):
     
     percent_delivered = (sent / total_groups) * 100 if total_groups > 0 else 0
     
-    print_log("POST", f"✅ Групповой пост доставлен {sent}/{total_groups} группам ({percent_delivered:.1f}%) (гарантия: {guaranteed}, шанс: {chance_hits})")
+    print_log("POST", f"✅ Групповой пост доставлен {sent}/{total_groups} группам ({percent_delivered:.1f}%)")
     
     try:
         bot.send_message(
@@ -678,11 +643,9 @@ WELCOME_TEXT = """
 <b>👥 Реклама в группы:</b>
 Посты отправляются только в группы
 Шанс: 1% для обычных, 5% для VIP
-Посты видят только группы, не пользователи
 
 <b>🎰 Казино:</b>
 Крутка раз в 8 часов → выигрыш: предметы
-Проиграл? Шанс растет: 0.01% → 0.02% → 0.03%...
 
 <b>🔄 Конвертация:</b>
 5% рейтинга → 1% удачи (раз в 24ч)
@@ -700,12 +663,11 @@ GROUP_WELCOME = """
 👋 <b>Привет! Я бот LowHigh</b>
 
 📢 <b>Что я делаю в группах?</b>
-Я принимаю посты от администраторов бота и рассылаю их по всем группам, где я есть.
+Я принимаю посты от администраторов групп и рассылаю их по всем группам, где я есть.
 
 <b>📝 Как отправить пост в группы?</b>
-1. Напиши мне в личку: @LowHigh_bot
-2. Используй команду /grouppost
-3. Отправь текст (и картинку, если ты VIP)
+1. Напиши /grouppost в этой группе (только для админов группы)
+2. Отправь текст (и картинку, если ты VIP)
 
 <b>📊 Шансы доставки:</b>
 • Обычный админ: 1% в каждую группу
@@ -714,16 +676,14 @@ GROUP_WELCOME = """
 
 <b>📋 Команды в группе:</b>
 /start - показать это сообщение
-
-<b>👑 Хочешь отправлять посты?</b>
-Попроси администратора бота дать тебе права!
+/grouppost - отправить пост в группы (только для админов)
 
 Приятного пользования! 🚀
 """
 
 # ========== РАССЫЛКА ПОСТОВ В ЛИЧКУ ==========
 
-def send_post_to_users(post, admin_id, force_all=False):
+def send_post_to_users(post, admin_id, force_all=False, media=None):
     from_user_id = post["user_id"]
     author = get_user(from_user_id)
     
@@ -773,7 +733,8 @@ def send_post_to_users(post, admin_id, force_all=False):
     data["post_contents"][str(post_id)] = {
         "text": post["text"],
         "author_id": from_user_id,
-        "author_name": get_user_display_name(from_user_id, hide_username=False)
+        "author_name": get_user_display_name(from_user_id, hide_username=False),
+        "has_media": media is not None
     }
     
     if str(post_id) not in data["post_reactions"]:
@@ -783,7 +744,7 @@ def send_post_to_users(post, admin_id, force_all=False):
         data["post_history"][str(post_id)] = {}
     
     author_emoji = get_user_status_emoji(from_user_id)
-    formatted_text = f"<i>{post['text']}</i>"
+    formatted_text = f"<i>{post['text']}</i>" if post['text'] else ""
     
     if "my_posts" not in author:
         author["my_posts"] = []
@@ -810,15 +771,24 @@ def send_post_to_users(post, admin_id, force_all=False):
             if is_admin(uid):
                 markup.add(InlineKeyboardButton("🚫 УДАЛИТЬ У ВСЕХ", callback_data=f"global_delete_{post_id}"))
             
-            msg = bot.send_message(
-                int(uid),
-                f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
-                parse_mode="HTML",
-                reply_markup=markup
-            )
+            if media:
+                bot.send_photo(
+                    int(uid),
+                    media,
+                    caption=f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+            else:
+                bot.send_message(
+                    int(uid),
+                    f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
             sent += 1
             author["rating"] = min(95.0, author["rating"] + 0.01)
-            data["post_history"][str(post_id)][str(uid)] = msg.message_id
+            data["post_history"][str(post_id)][str(uid)] = True
             author["weekly_activity"] = author.get("weekly_activity", 0) + 5
             author["weekly_posts"] = author.get("weekly_posts", 0) + 1
             print_log("SUCCESS", f"Пост доставлен {uid} (гарантия)")
@@ -853,16 +823,25 @@ def send_post_to_users(post, admin_id, force_all=False):
                 if is_admin(uid):
                     markup.add(InlineKeyboardButton("🚫 УДАЛИТЬ У ВСЕХ", callback_data=f"global_delete_{post_id}"))
                 
-                msg = bot.send_message(
-                    int(uid),
-                    f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
-                    parse_mode="HTML",
-                    reply_markup=markup
-                )
+                if media:
+                    bot.send_photo(
+                        int(uid),
+                        media,
+                        caption=f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
+                        parse_mode="HTML",
+                        reply_markup=markup
+                    )
+                else:
+                    bot.send_message(
+                        int(uid),
+                        f"📢 <b>Пост</b> {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{formatted_text}",
+                        parse_mode="HTML",
+                        reply_markup=markup
+                    )
                 sent += 1
                 chance_hits += 1
                 author["rating"] = min(95.0, author["rating"] + 0.01)
-                data["post_history"][str(post_id)][str(uid)] = msg.message_id
+                data["post_history"][str(post_id)][str(uid)] = True
                 author["weekly_activity"] += 5
                 author["weekly_posts"] += 1
             except Exception as e:
@@ -870,7 +849,7 @@ def send_post_to_users(post, admin_id, force_all=False):
     
     percent_delivered = (sent / total) * 100 if total > 0 else 0
     
-    print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам ({percent_delivered:.1f}%) (гарантия: {guaranteed}, шанс: {chance_hits})")
+    print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам ({percent_delivered:.1f}%)")
     
     try:
         bot.send_message(
@@ -906,12 +885,8 @@ def delete_post_globally(post_id):
     if pid not in data["post_history"]:
         return 0
     cnt = 0
-    for uid, mid in data["post_history"][pid].items():
-        try:
-            bot.delete_message(int(uid), mid)
-            cnt += 1
-        except:
-            pass
+    for uid in data["post_history"][pid].keys():
+        cnt += 1
     del data["post_history"][pid]
     if pid in data["post_contents"]:
         del data["post_contents"][pid]
@@ -1052,10 +1027,9 @@ def update_quest_progress(user_id, qtype, value=1, extra=None):
             user["quest_bonus_ready"] = True
         save_data(data)
 
-# ========== НАЛОГ НА РЕЙТИНГ ==========
+# ========== НАЛОГ ==========
 
 def apply_rating_tax():
-    """Снимает 1% рейтинга у всех (по МСК) с уведомлением"""
     taxed = 0
     notified = 0
     
@@ -1089,12 +1063,11 @@ def apply_rating_tax():
                 pass
     
     save_data(data)
-    print_log("TAX", f"Налог: снят 1% у {taxed} пользователей, уведомлено {notified}")
+    print_log("INFO", f"Налог: снят 1% у {taxed} пользователей, уведомлено {notified}")
 
-# ========== УДАЛЕНИЕ НЕАКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ ==========
+# ========== УДАЛЕНИЕ НЕАКТИВНЫХ ==========
 
 def delete_inactive_users():
-    """Удаляет пользователей, которые не были активны более 7 дней"""
     now = now_msk()
     cutoff = now - timedelta(days=7)
     to_delete = []
@@ -1107,7 +1080,6 @@ def delete_inactive_users():
                 to_delete.append(uid)
     
     for uid in to_delete:
-        # Сохраняем информацию об удалении
         user = data["users"][uid]
         data["deleted_users_log"].append({
             "id": uid,
@@ -1116,7 +1088,6 @@ def delete_inactive_users():
             "reason": "Неактивность 7+ дней"
         })
         
-        # Удаляем из всех списков
         if uid in data["banned_users"]:
             data["banned_users"].remove(uid)
         if uid in data.get("admins", []):
@@ -1126,7 +1097,6 @@ def delete_inactive_users():
         if uid in data.get("verified_users", []):
             data["verified_users"].remove(uid)
         
-        # Удаляем посты пользователя
         for pid in list(data["post_history"].keys()):
             if pid in data["post_history"]:
                 del data["post_history"][pid]
@@ -1137,12 +1107,10 @@ def delete_inactive_users():
             if pid in data["post_reactions"]:
                 del data["post_reactions"][pid]
         
-        # Удаляем из групп
         for gid, group in data["groups"].items():
             if uid in group.get("group_admins", []):
                 group["group_admins"].remove(uid)
         
-        # Удаляем из данных
         del data["users"][uid]
         print_log("INFO", f"Удален неактивный пользователь {uid}")
     
@@ -1154,13 +1122,11 @@ def delete_inactive_users():
 # ========== ОЧИСТКА СТАРЫХ ПОСТОВ ==========
 
 def cleanup_old_posts():
-    """Удаляет посты старше 7 дней и посты, не отправленные 3 дня"""
     now = now_msk()
     cutoff_7d = now - timedelta(days=7)
     cutoff_3d = now - timedelta(days=3)
     deleted_count = 0
     
-    # Удаляем старые посты из истории
     for uid, user in data["users"].items():
         if "my_posts" in user:
             new_posts = []
@@ -1171,7 +1137,6 @@ def cleanup_old_posts():
                     if post_date and post_date > cutoff_7d:
                         new_posts.append(pid)
                     else:
-                        # Удаляем из глобальной истории
                         if str(pid) in data["post_history"]:
                             delete_post_globally(pid)
                         deleted_count += 1
@@ -1179,7 +1144,6 @@ def cleanup_old_posts():
                     new_posts.append(pid)
             user["my_posts"] = new_posts
     
-    # Удаляем неотправленные посты (старше 3 дней)
     new_posts = []
     for post in data["posts"]:
         post_time = parse_date(post.get("time"))
@@ -1493,7 +1457,6 @@ def start(message):
     # Обработка добавления в группу
     if message.chat.type in ["group", "supergroup"]:
         if add_group(message.chat.id, message.chat.title, user_id):
-            # Добавляем пользователя как админа группы, если он админ в чате
             try:
                 admins = bot.get_chat_administrators(message.chat.id)
                 for admin in admins:
@@ -1503,17 +1466,17 @@ def start(message):
             except:
                 pass
             
-            # Отправляем приветственное сообщение в группу
+            # Отправляем в группу
             bot.send_message(
                 message.chat.id,
                 GROUP_WELCOME,
                 parse_mode="HTML"
             )
-            # Уведомляем админа в личку
+            # Уведомляем в личку
             bot.send_message(
                 user_id,
                 f"✅ Группа '{message.chat.title}' добавлена в базу для рассылки!\n"
-                f"Если ты админ в этой группе, ты можешь отправлять посты в группы через /grouppost"
+                f"Если ты админ в этой группе, ты можешь отправлять посты в группы через /grouppost в самой группе."
             )
         return
     
@@ -1619,7 +1582,7 @@ def cmd_group_post(message):
         bot.send_message(user_id, "🚫 Вы забанены")
         return
     
-    # Проверяем, является ли пользователь админом группы
+    # Отправляем в группе, а не в личку
     if message.chat.type in ["group", "supergroup"]:
         try:
             admins = bot.get_chat_administrators(message.chat.id)
@@ -1627,14 +1590,13 @@ def cmd_group_post(message):
             if is_group_admin:
                 add_group_admin(user_id, message.chat.id)
             else:
-                bot.send_message(user_id, "🚫 Только администраторы группы могут отправлять посты в группы через бота!")
+                bot.send_message(message.chat.id, "🚫 Только администраторы группы могут отправлять посты в группы!")
                 return
         except:
-            bot.send_message(user_id, "❌ Не удалось проверить права администратора. Убедись, что я есть в группе.")
+            bot.send_message(message.chat.id, "❌ Не удалось проверить права администратора.")
             return
-    elif not is_admin(user_id):
-        # В личке только бот-админы могут отправлять групповые посты
-        bot.send_message(user_id, "🚫 Только администраторы бота могут отправлять посты в группы из лички!")
+    else:
+        bot.send_message(user_id, "🚫 Команда /grouppost работает только в группах!")
         return
     
     user = get_user(user_id)
@@ -1645,20 +1607,18 @@ def cmd_group_post(message):
         save_data(data)
         
         bot.send_message(
-            user_id,
-            f"⏳ Подожди ещё {format_time(cooldown)} перед следующим постом",
-            reply_markup=main_keyboard()
+            message.chat.id,
+            f"⏳ Подожди ещё {format_time(cooldown)} перед следующим постом"
         )
         return
     
     bot.send_message(
-        user_id,
+        message.chat.id,
         f"👥 <b>Пост в группы</b>\n\n"
         f"Шанс доставки: {'5% (VIP)' if is_vip(user_id) else '1% (обычный)'}\n"
         f"Гарантированная доставка: минимум 1 группа или 1% от всех групп\n\n"
         f"📝 Отправь текст поста (или текст + картинку, если ты VIP):",
-        parse_mode="HTML",
-        reply_markup=cancel_keyboard()
+        parse_mode="HTML"
     )
     bot.register_next_step_handler(message, receive_group_post)
 
@@ -1778,7 +1738,7 @@ def cmd_help(message):
 
 <b>Основные команды:</b>
 /post - Пост в личку пользователям
-/grouppost - Пост в группы (для админов бота или админов групп)
+/grouppost - Пост в группы (только в группах для админов группы)
 /casino - Информация о казино
 /spin - Сделать крутку (доступно раз в 8ч)
 /top - Топ-10 игроков по рейтингу
@@ -1796,7 +1756,6 @@ def cmd_help(message):
 /addadmin @user - назначить админа
 /removeadmin @user - удалить админа
 /addvip @user [дни] - выдать VIP
-/vipinfo @user - инфо о VIP
 /removevip @user - снять VIP
 /addverified @user - верифицировать
 /removeverified @user - снять верификацию
@@ -1805,7 +1764,7 @@ def cmd_help(message):
 /delpost ID - удалить пост у всех
 /restime @user - сбросить КД
 /profile @user - просмотр профиля
-/backupsave - скачать бэкап базы (все админы)
+/backupsave - скачать бэкап базы
 /backupload - загрузить бэкап базы (только мастер-админ)
     """
     bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
@@ -1845,24 +1804,23 @@ def cmd_convert(message):
         parse_mode="HTML"
     )
 
-# ========== ОБРАБОТЧИК: ГРУППОВЫЕ ПОСТЫ С КАРТИНКАМИ ==========
+# ========== ПРИЁМ ГРУППОВЫХ ПОСТОВ ==========
 def receive_group_post(message):
     user_id = message.from_user.id
+    chat_id = message.chat.id
     
     if is_banned(user_id):
-        bot.send_message(user_id, "🚫 Вы забанены")
+        bot.send_message(chat_id, "🚫 Вы забанены")
         return
     
     user = get_user(user_id)
     if not user:
         return
     
-    # Проверка отмены
     if message.text and message.text.lower() in ["отмена", "cancel"]:
-        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
+        bot.send_message(chat_id, "❌ Отправка отменена")
         return
     
-    # Проверяем, есть ли у нас медиа
     media = None
     text = ""
     
@@ -1875,29 +1833,24 @@ def receive_group_post(message):
                 text = message.caption
         else:
             bot.send_message(
-                user_id,
-                "❌ Только VIP могут отправлять посты с картинками!",
-                reply_markup=main_keyboard()
+                chat_id,
+                "❌ Только VIP могут отправлять посты с картинками!"
             )
             return
     else:
         bot.send_message(
-            user_id,
-            "❌ Принимаем только текст или текст+картинка!",
-            reply_markup=main_keyboard()
+            chat_id,
+            "❌ Принимаем только текст или текст+картинка!"
         )
         return
     
-    # Проверяем длину текста
     if text and len(text) > 500:
         bot.send_message(
-            user_id,
-            f"❌ Пост слишком длинный! Максимум 500 символов.\nУ тебя: {len(text)} символов",
-            reply_markup=main_keyboard()
+            chat_id,
+            f"❌ Пост слишком длинный! Максимум 500 символов.\nУ тебя: {len(text)} символов"
         )
         return
     
-    # Цензура для не-VIP
     if not is_vip(user_id):
         text = censor_text(text, user_id)
     
@@ -1912,6 +1865,7 @@ def receive_group_post(message):
     
     user["last_post_time"] = format_msk_time(datetime.now())
     user["posts_count"] = user.get("posts_count", 0) + 1
+    user["last_post_notification_sent"] = False
     
     if text and len(text) > 200:
         update_quest_progress(user_id, "post_length", 200, extra=len(text))
@@ -1924,11 +1878,132 @@ def receive_group_post(message):
     save_data(data)
     
     bot.send_message(
-        user_id,
+        chat_id,
         f"✅ <b>Групповой пост разослан!</b>\n\n📊 Доставлено: {sent} группам",
-        parse_mode="HTML",
-        reply_markup=main_keyboard()
+        parse_mode="HTML"
     )
+
+# ========== ПРИЁМ ПОСТОВ В ЛИЧКУ ==========
+def receive_post(message, post_type="user"):
+    user_id = message.from_user.id
+    
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 Вы забанены")
+        return
+    
+    user = get_user(user_id)
+    if not user:
+        return
+    
+    can_post, cd = check_post_cooldown(user)
+    if not can_post:
+        user["last_post_notification_sent"] = False
+        save_data(data)
+        
+        bot.send_message(
+            user_id,
+            f"⏳ Подожди ещё {format_time(cd)} перед следующим постом",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    if message.text and message.text.lower() in ["отмена", "cancel"]:
+        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
+        return
+    
+    media = None
+    text = ""
+    
+    if message.content_type == 'photo':
+        if is_vip(user_id):
+            media = message.photo[-1].file_id
+            if message.caption:
+                text = message.caption
+        else:
+            bot.send_message(
+                user_id,
+                "❌ Только VIP могут отправлять посты с картинками!",
+                reply_markup=main_keyboard()
+            )
+            return
+    elif message.content_type == 'text':
+        text = message.text
+    else:
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст или текст+картинка!",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    if not text and not media:
+        return
+    
+    max_len = get_max_post_length(user_id)
+    if text and len(text) > max_len:
+        bot.send_message(
+            user_id,
+            f"❌ Пост слишком длинный! Максимум {max_len} символов.\nУ тебя: {len(text)} символов",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    text = censor_text(text, user_id) if text else ""
+    
+    post = {
+        "id": int(time.time() * 1000),
+        "user_id": str(user_id),
+        "username": user.get("username"),
+        "text": text,
+        "time": format_msk_time(datetime.now()),
+        "type": post_type,
+        "media": media
+    }
+    
+    user["last_post_time"] = format_msk_time(datetime.now())
+    user["posts_count"] = user.get("posts_count", 0) + 1
+    user["last_post_notification_sent"] = False
+    
+    update_quest_progress(user_id, "post", 1)
+    if len(text) > 200:
+        update_quest_progress(user_id, "post_length", 200, extra=len(text))
+    
+    if is_admin(user_id) or is_verified(user_id):
+        sent = send_post_to_users(post, user_id, media=media)
+        bot.send_message(
+            user_id,
+            f"✅ <b>Пост мгновенно разослан!</b>\n\n📊 Доставлено: {sent} пользователям",
+            parse_mode="HTML",
+            reply_markup=main_keyboard()
+        )
+        user["total_posts"] += 1
+        save_data(data)
+    else:
+        data["posts"].append(post)
+        user["total_posts"] += 1
+        save_data(data)
+        
+        bot.send_message(
+            user_id,
+            f"✅ <b>Пост отправлен на модерацию!</b>\n\nКак только администратор одобрит, он уйдёт в рассылку.",
+            parse_mode="HTML",
+            reply_markup=main_keyboard()
+        )
+        
+        print_log("POST", f"Новый пост от {get_user_display_name(user_id, hide_username=False)}")
+        
+        for admin_id in data.get("admins", []):
+            if admin_id != str(user_id):
+                admin = get_user(admin_id)
+                if admin and admin.get("admin_notifications", True):
+                    try:
+                        bot.send_message(
+                            int(admin_id),
+                            f"🆕 <b>Новый пост от {get_user_display_name(user_id, hide_username=False)}!</b>\n/admin - для модерации",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
 
 # ========== АДМИН-КОМАНДЫ ==========
 
@@ -2570,6 +2645,263 @@ def profile(message):
 
 # ========== ОБРАБОТЧИКИ КОЛЛБЭКОВ ==========
 
+def receive_reject_reason(message, post_data, post_index):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    reason = message.text if message.text and message.text != '-' else "Причина не указана"
+    
+    data["posts"].pop(post_index)
+    save_data(data)
+    
+    try:
+        bot.send_message(
+            int(post_data["user_id"]),
+            f"❌ <b>Твой пост отклонён</b>\n\n📝 <b>Причина:</b> {reason}\n\nНе расстраивайся, попробуй ещё раз!",
+            parse_mode="HTML"
+        )
+    except:
+        pass
+    
+    bot.send_message(
+        user_id,
+        f"❌ <b>Пост отклонён</b>\n\nПричина отправлена автору.",
+        parse_mode="HTML"
+    )
+    log_admin_action(user_id, "Отклонил пост", f"Причина: {reason}")
+    
+    if data["posts"]:
+        next_post = data["posts"][0]
+        author = get_user_display_name(next_post["user_id"], hide_username=False)
+        text = f"📝 <b>Следующий пост от {author}</b>\n\n{next_post['text']}"
+        bot.send_message(
+            user_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=admin_post_actions_keyboard(next_post['id'])
+        )
+    else:
+        bot.send_message(
+            user_id,
+            "📭 <b>Больше нет постов на модерации</b>",
+            parse_mode="HTML",
+            reply_markup=admin_main_keyboard()
+        )
+
+def receive_interpol_post(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    media = None
+    text = ""
+    
+    if message.content_type == 'photo':
+        media = message.photo[-1].file_id
+        if message.caption:
+            text = message.caption
+    elif message.content_type == 'text':
+        text = message.text
+    else:
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст или текст+картинка!",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+    
+    if text and len(text) > 500:
+        bot.send_message(
+            user_id,
+            f"❌ Пост слишком длинный! Максимум 500 символов.",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+    
+    post = {
+        "id": int(time.time() * 1000),
+        "user_id": str(user_id),
+        "username": "ADMIN",
+        "text": text,
+        "time": format_msk_time(datetime.now()),
+        "media": media
+    }
+    
+    sent = send_post_to_users(post, user_id, force_all=True, media=media)
+    bot.send_message(
+        user_id,
+        f"📢 <b>Интерпол-рассылка выполнена!</b>\n\n✅ Доставлено: {sent} пользователям",
+        parse_mode="HTML",
+        reply_markup=admin_main_keyboard()
+    )
+    log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent}")
+
+def receive_hotline_message(message):
+    user_id = message.from_user.id
+    
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 Вы забанены")
+        return
+    
+    user = get_user(user_id)
+    if not user:
+        return
+    
+    if message.text and message.text.lower() in ["отмена", "cancel"]:
+        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
+        return
+    
+    if message.content_type != 'text':
+        bot.send_message(
+            user_id,
+            "❌ Принимаем только текст!",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    user["last_hotline"] = format_msk_time(datetime.now())
+    save_data(data)
+    
+    text = f"""
+📞 <b>ГОРЯЧАЯ ЛИНИЯ</b>
+
+<b>От:</b> {get_user_display_name(user_id, hide_username=False)} (ID: {user_id})
+<b>Время:</b> {format_msk_time(datetime.now())}
+
+<b>Сообщение:</b>
+{message.text}
+
+Ответьте пользователю в личку.
+    """
+    
+    for admin_id in data.get("admins", []):
+        try:
+            bot.send_message(int(admin_id), text, parse_mode="HTML")
+        except:
+            pass
+    
+    bot.send_message(
+        user_id,
+        "✅ <b>Сообщение отправлено администраторам!</b>\n\nОни ответят тебе в личку в ближайшее время.",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+def admin_search_user(message):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    query = message.text.strip()
+    bot.send_message(user_id, f"🔍 Ищем: {query}")
+    
+    target_id = resolve_target(query)
+    
+    if not target_id:
+        bot.send_message(
+            user_id,
+            f"❌ Пользователь {query} не найден в базе бота.\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь ещё не запускал бота\n"
+            f"• Неправильный username\n"
+            f"• Пользователь заблокировал бота",
+            parse_mode="HTML",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+    
+    target = get_user(target_id)
+    
+    status = "Обычный"
+    if is_vip(target_id):
+        status = "👑 VIP"
+    elif is_verified(target_id):
+        status = "✅ Вериф"
+    
+    vip_info = ""
+    if target.get("vip_until"):
+        until = parse_date(target["vip_until"])
+        if until and until > datetime.now():
+            left = until - datetime.now()
+            vip_info = f"\nVIP до: {(until + timedelta(hours=3)).strftime('%d.%m.%Y')} (осталось {left.days} дн.)"
+    
+    last_seen = "давно"
+    if target.get("last_seen"):
+        last = parse_date(target["last_seen"])
+        if last:
+            last = last - timedelta(hours=3)
+            delta = datetime.now() - last
+            if delta.days > 0:
+                last_seen = f"{delta.days} дн. назад"
+            elif delta.seconds > 3600:
+                last_seen = f"{delta.seconds//3600} ч. назад"
+            else:
+                last_seen = f"{delta.seconds//60} мин. назад"
+        else:
+            last_seen = target["last_seen"]
+    
+    text = f"""
+👤 <b>ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ</b>
+
+👤 Имя: {get_user_display_name(target_id, hide_username=False)}
+🆔 ID: {target_id}
+📊 Статус: {status}{vip_info}
+
+📈 Рейтинг: {target['rating']:.1f}%
+🍀 Удача: {target['luck']:.2f}%
+📻 Приём: {target['incoming_chance']}%
+
+📝 Постов: {target['total_posts']}
+🎰 Игр: {target['total_casino_attempts']}
+🏆 Побед: {target['total_wins']}
+👥 Рефералов: {len(target.get('referrals', []))}/{get_max_referrals(target_id)}
+
+📅 Зарегистрирован: {target['join_date'][:10]}
+🕐 Последний визит: {last_seen}
+    """
+    
+    bot.send_message(
+        user_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=admin_user_profile_keyboard(target_id)
+    )
+    log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
+
+def add_group_admin_callback(message, chat_id, original_msg_id):
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    target_username = message.text.strip()
+    target_id = resolve_target(target_username)
+    
+    if not target_id:
+        bot.send_message(user_id, f"❌ Пользователь {target_username} не найден")
+        return
+    
+    if add_group_admin(target_id, chat_id):
+        bot.send_message(
+            user_id,
+            f"✅ {get_user_display_name(target_id, hide_username=False)} добавлен как админ группы"
+        )
+        log_admin_action(user_id, "Добавил админа группы", f"Группа {chat_id}, админ {target_id}")
+    else:
+        bot.send_message(user_id, f"❌ Не удалось добавить админа")
+    
+    bot.edit_message_text(
+        f"👥 <b>АДМИНИСТРАТОРЫ ГРУППЫ</b>\n\nВыбери админа для удаления или добавь нового:",
+        user_id,
+        original_msg_id,
+        parse_mode="HTML",
+        reply_markup=admin_group_admins_keyboard(chat_id)
+    )
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
@@ -2745,7 +3077,7 @@ def callback_handler(call):
         log_admin_action(user_id, "Выдал VIP всем", f"{count} пользователей")
     
     # АДМИНКА
-    if data_cmd == "admin_main":
+    elif data_cmd == "admin_main":
         if not is_admin(user_id):
             return
         bot.edit_message_text(
@@ -2893,7 +3225,6 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, f"VIP статус {'включён' if not current else 'выключен'}")
             log_admin_action(user_id, "Изменил VIP статус группы", f"ID {chat_id}")
         
-        # Возвращаемся к списку групп
         bot.edit_message_text(
             "👥 <b>УПРАВЛЕНИЕ ГРУППАМИ</b>\n\n"
             "Группы для рассылки:",
@@ -3037,7 +3368,7 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Пост не найден")
             return
         
-        sent = send_post_to_users(post_data, user_id)
+        sent = send_post_to_users(post_data, user_id, media=post_data.get("media"))
         data["posts"].pop(idx)
         save_data(data)
         
@@ -3144,7 +3475,7 @@ def callback_handler(call):
         post_id = data_cmd.split("_")[1]
         for i, p in enumerate(data["posts"]):
             if str(p["id"]) == post_id:
-                sent = send_post_to_users(p, user_id, force_all=True)
+                sent = send_post_to_users(p, user_id, force_all=True, media=p.get("media"))
                 data["posts"].pop(i)
                 save_data(data)
                 bot.edit_message_text(
@@ -3161,7 +3492,7 @@ def callback_handler(call):
             return
         
         bot.edit_message_text(
-            "📢 <b>Интерпол-рассылка</b>\n\nОтправь текст поста для рассылки <b>ВСЕМ</b> пользователям:",
+            "📢 <b>Интерпол-рассылка</b>\n\nОтправь текст поста (или текст+картинку) для рассылки <b>ВСЕМ</b> пользователям:",
             user_id,
             call.message.message_id,
             parse_mode="HTML"
@@ -3410,7 +3741,8 @@ def callback_handler(call):
         
         active_users = []
         for uid, u in data["users"].items():
-            if uid not in data["banned_users"] and u.get("weekly_activity", 0) > 0:
+            # Исключаем админов из активности
+            if uid not in data["banned_users"] and not is_admin(uid) and u.get("weekly_activity", 0) > 0:
                 active_users.append({
                     "id": uid,
                     "name": get_user_display_name(uid, hide_username=False),
@@ -3705,39 +4037,12 @@ def callback_handler(call):
         bot.register_next_step_handler_by_chat_id(user_id, receive_post, post_type="user")
     
     elif data_cmd == "write_group_post":
-        # Проверяем, является ли пользователь админом группы (если команда из группы)
-        if call.message.chat.type in ["group", "supergroup"]:
-            try:
-                admins = bot.get_chat_administrators(call.message.chat.id)
-                is_group_admin = any(admin.user.id == user_id for admin in admins)
-                if not is_group_admin:
-                    bot.answer_callback_query(call.id, "🚫 Только админы группы могут отправлять посты")
-                    return
-                add_group_admin(user_id, call.message.chat.id)
-            except:
-                bot.answer_callback_query(call.id, "❌ Не удалось проверить права")
-                return
-        elif not is_admin(user_id):
-            bot.answer_callback_query(call.id, "❌ Только админы бота могут отправлять групповые посты из лички")
-            return
-        
-        can_post, cd = check_post_cooldown(user)
-        if not can_post:
-            user["last_post_notification_sent"] = False
-            save_data(data)
-            
-            bot.answer_callback_query(call.id, f"Жди ещё {format_time(cd)}")
-            return
-        
         bot.send_message(
             user_id,
-            f"👥 <b>Пост в группы</b>\n\n"
-            f"Шанс доставки: {'5% (VIP)' if is_vip(user_id) else '1% (обычный)'}\n\n"
-            f"📝 Отправь текст поста (или текст+картинку, если ты VIP):",
-            parse_mode="HTML",
-            reply_markup=cancel_keyboard()
+            "👥 <b>Пост в группы</b>\n\n"
+            "Эта команда работает только в группах! Добавь бота в группу и напиши /grouppost там.",
+            parse_mode="HTML"
         )
-        bot.register_next_step_handler_by_chat_id(user_id, receive_group_post)
     
     elif data_cmd == "cancel_post":
         bot.clear_step_handler_by_chat_id(user_id)
@@ -4147,386 +4452,6 @@ def callback_handler(call):
             )
         )
 
-# ========== ПРИЁМ СООБЩЕНИЙ ==========
-
-def receive_post(message, post_type="user"):
-    user_id = message.from_user.id
-    
-    if is_banned(user_id):
-        bot.send_message(user_id, "🚫 Вы забанены")
-        return
-    
-    user = get_user(user_id)
-    if not user:
-        return
-    
-    can_post, cd = check_post_cooldown(user)
-    if not can_post:
-        user["last_post_notification_sent"] = False
-        save_data(data)
-        
-        bot.send_message(
-            user_id,
-            f"⏳ Подожди ещё {format_time(cd)} перед следующим постом",
-            reply_markup=main_keyboard()
-        )
-        return
-    
-    if message.text and message.text.lower() in ["отмена", "cancel"]:
-        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
-        return
-    
-    media = None
-    text = ""
-    
-    # Обработка картинок для VIP
-    if message.content_type == 'photo':
-        if is_vip(user_id):
-            media = message.photo[-1].file_id
-            if message.caption:
-                text = message.caption
-        else:
-            bot.send_message(
-                user_id,
-                "❌ Только VIP могут отправлять посты с картинками!",
-                reply_markup=main_keyboard()
-            )
-            return
-    elif message.content_type == 'text':
-        text = message.text
-    else:
-        bot.send_message(
-            user_id,
-            "❌ Принимаем только текст или текст+картинка!",
-            reply_markup=main_keyboard()
-        )
-        return
-    
-    if not text and not media:
-        return
-    
-    max_len = get_max_post_length(user_id) if post_type == "user" else 500
-    if text and len(text) > max_len:
-        bot.send_message(
-            user_id,
-            f"❌ Пост слишком длинный! Максимум {max_len} символов.\nУ тебя: {len(text)} символов",
-            reply_markup=main_keyboard()
-        )
-        return
-    
-    text = censor_text(text, user_id) if text else ""
-    
-    post = {
-        "id": int(time.time() * 1000),
-        "user_id": str(user_id),
-        "username": user.get("username"),
-        "text": text,
-        "time": format_msk_time(datetime.now()),
-        "type": post_type,
-        "media": media
-    }
-    
-    user["last_post_time"] = format_msk_time(datetime.now())
-    user["posts_count"] = user.get("posts_count", 0) + 1
-    user["last_post_notification_sent"] = False
-    
-    update_quest_progress(user_id, "post", 1)
-    if len(text) > 200:
-        update_quest_progress(user_id, "post_length", 200, extra=len(text))
-    
-    if post_type == "group":
-        if not is_admin(user_id):
-            bot.send_message(user_id, "🚫 Только админы могут отправлять посты в группы")
-            return
-        
-        sent = send_group_post(post, user_id, media)
-        user["total_posts"] += 1
-        save_data(data)
-        bot.send_message(
-            user_id,
-            f"✅ <b>Групповой пост разослан!</b>\n\n📊 Доставлено: {sent} группам",
-            parse_mode="HTML",
-            reply_markup=main_keyboard()
-        )
-    else:
-        if is_admin(user_id) or is_verified(user_id):
-            sent = send_post_to_users(post, user_id)
-            bot.send_message(
-                user_id,
-                f"✅ <b>Пост мгновенно разослан!</b>\n\n📊 Доставлено: {sent} пользователям",
-                parse_mode="HTML",
-                reply_markup=main_keyboard()
-            )
-            user["total_posts"] += 1
-            save_data(data)
-        else:
-            data["posts"].append(post)
-            user["total_posts"] += 1
-            save_data(data)
-            
-            bot.send_message(
-                user_id,
-                f"✅ <b>Пост отправлен на модерацию!</b>\n\nКак только администратор одобрит, он уйдёт в рассылку.",
-                parse_mode="HTML",
-                reply_markup=main_keyboard()
-            )
-            
-            print_log("POST", f"Новый пост от {get_user_display_name(user_id, hide_username=False)}")
-            
-            for admin_id in data.get("admins", []):
-                if admin_id != str(user_id):
-                    admin = get_user(admin_id)
-                    if admin and admin.get("admin_notifications", True):
-                        try:
-                            bot.send_message(
-                                int(admin_id),
-                                f"🆕 <b>Новый пост от {get_user_display_name(user_id, hide_username=False)}!</b>\n/admin - для модерации",
-                                parse_mode="HTML"
-                            )
-                        except:
-                            pass
-
-def receive_reject_reason(message, post_data, post_index):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    reason = message.text if message.text and message.text != '-' else "Причина не указана"
-    
-    data["posts"].pop(post_index)
-    save_data(data)
-    
-    try:
-        bot.send_message(
-            int(post_data["user_id"]),
-            f"❌ <b>Твой пост отклонён</b>\n\n📝 <b>Причина:</b> {reason}\n\nНе расстраивайся, попробуй ещё раз!",
-            parse_mode="HTML"
-        )
-    except:
-        pass
-    
-    bot.send_message(
-        user_id,
-        f"❌ <b>Пост отклонён</b>\n\nПричина отправлена автору.",
-        parse_mode="HTML"
-    )
-    log_admin_action(user_id, "Отклонил пост", f"Причина: {reason}")
-    
-    if data["posts"]:
-        next_post = data["posts"][0]
-        author = get_user_display_name(next_post["user_id"], hide_username=False)
-        text = f"📝 <b>Следующий пост от {author}</b>\n\n{next_post['text']}"
-        bot.send_message(
-            user_id,
-            text,
-            parse_mode="HTML",
-            reply_markup=admin_post_actions_keyboard(next_post['id'])
-        )
-    else:
-        bot.send_message(
-            user_id,
-            "📭 <b>Больше нет постов на модерации</b>",
-            parse_mode="HTML",
-            reply_markup=admin_main_keyboard()
-        )
-
-def receive_interpol_post(message):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    if message.content_type != 'text':
-        bot.send_message(
-            user_id,
-            "❌ Принимаем только текст!",
-            reply_markup=admin_main_keyboard()
-        )
-        return
-    
-    if message.text:
-        post = {
-            "id": int(time.time() * 1000),
-            "user_id": str(user_id),
-            "username": "ADMIN",
-            "text": message.text,
-            "time": format_msk_time(datetime.now())
-        }
-        
-        sent = send_post_to_users(post, user_id, force_all=True)
-        bot.send_message(
-            user_id,
-            f"📢 <b>Интерпол-рассылка выполнена!</b>\n\n✅ Доставлено: {sent} пользователям",
-            parse_mode="HTML",
-            reply_markup=admin_main_keyboard()
-        )
-        log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent}")
-
-def receive_hotline_message(message):
-    user_id = message.from_user.id
-    
-    if is_banned(user_id):
-        bot.send_message(user_id, "🚫 Вы забанены")
-        return
-    
-    user = get_user(user_id)
-    if not user:
-        return
-    
-    if message.text and message.text.lower() in ["отмена", "cancel"]:
-        bot.send_message(user_id, "❌ Отправка отменена", reply_markup=main_keyboard())
-        return
-    
-    if message.content_type != 'text':
-        bot.send_message(
-            user_id,
-            "❌ Принимаем только текст!",
-            reply_markup=main_keyboard()
-        )
-        return
-    
-    user["last_hotline"] = format_msk_time(datetime.now())
-    save_data(data)
-    
-    text = f"""
-📞 <b>ГОРЯЧАЯ ЛИНИЯ</b>
-
-<b>От:</b> {get_user_display_name(user_id, hide_username=False)} (ID: {user_id})
-<b>Время:</b> {format_msk_time(datetime.now())}
-
-<b>Сообщение:</b>
-{message.text}
-
-Ответьте пользователю в личку.
-    """
-    
-    for admin_id in data.get("admins", []):
-        try:
-            bot.send_message(int(admin_id), text, parse_mode="HTML")
-        except:
-            pass
-    
-    bot.send_message(
-        user_id,
-        "✅ <b>Сообщение отправлено администраторам!</b>\n\nОни ответят тебе в личку в ближайшее время.",
-        parse_mode="HTML",
-        reply_markup=main_keyboard()
-    )
-
-def admin_search_user(message):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    query = message.text.strip()
-    bot.send_message(user_id, f"🔍 Ищем: {query}")
-    
-    target_id = resolve_target(query)
-    
-    if not target_id:
-        bot.send_message(
-            user_id,
-            f"❌ Пользователь {query} не найден в базе бота.\n\n"
-            f"Возможные причины:\n"
-            f"• Пользователь ещё не запускал бота\n"
-            f"• Неправильный username\n"
-            f"• Пользователь заблокировал бота",
-            parse_mode="HTML",
-            reply_markup=admin_main_keyboard()
-        )
-        return
-    
-    target = get_user(target_id)
-    
-    status = "Обычный"
-    if is_vip(target_id):
-        status = "👑 VIP"
-    elif is_verified(target_id):
-        status = "✅ Вериф"
-    
-    vip_info = ""
-    if target.get("vip_until"):
-        until = parse_date(target["vip_until"])
-        if until and until > datetime.now():
-            left = until - datetime.now()
-            vip_info = f"\nVIP до: {(until + timedelta(hours=3)).strftime('%d.%m.%Y')} (осталось {left.days} дн.)"
-    
-    last_seen = "давно"
-    if target.get("last_seen"):
-        last = parse_date(target["last_seen"])
-        if last:
-            last = last - timedelta(hours=3)
-            delta = datetime.now() - last
-            if delta.days > 0:
-                last_seen = f"{delta.days} дн. назад"
-            elif delta.seconds > 3600:
-                last_seen = f"{delta.seconds//3600} ч. назад"
-            else:
-                last_seen = f"{delta.seconds//60} мин. назад"
-        else:
-            last_seen = target["last_seen"]
-    
-    text = f"""
-👤 <b>ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ</b>
-
-👤 Имя: {get_user_display_name(target_id, hide_username=False)}
-🆔 ID: {target_id}
-📊 Статус: {status}{vip_info}
-
-📈 Рейтинг: {target['rating']:.1f}%
-🍀 Удача: {target['luck']:.2f}%
-📻 Приём: {target['incoming_chance']}%
-
-📝 Постов: {target['total_posts']}
-🎰 Игр: {target['total_casino_attempts']}
-🏆 Побед: {target['total_wins']}
-👥 Рефералов: {len(target.get('referrals', []))}/{get_max_referrals(target_id)}
-
-📅 Зарегистрирован: {target['join_date'][:10]}
-🕐 Последний визит: {last_seen}
-    """
-    
-    bot.send_message(
-        user_id,
-        text,
-        parse_mode="HTML",
-        reply_markup=admin_user_profile_keyboard(target_id)
-    )
-    log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
-
-def add_group_admin_callback(message, chat_id, original_msg_id):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    target_username = message.text.strip()
-    target_id = resolve_target(target_username)
-    
-    if not target_id:
-        bot.send_message(user_id, f"❌ Пользователь {target_username} не найден")
-        return
-    
-    if add_group_admin(target_id, chat_id):
-        bot.send_message(
-            user_id,
-            f"✅ {get_user_display_name(target_id, hide_username=False)} добавлен как админ группы"
-        )
-        log_admin_action(user_id, "Добавил админа группы", f"Группа {chat_id}, админ {target_id}")
-    else:
-        bot.send_message(user_id, f"❌ Не удалось добавить админа")
-    
-    # Возвращаемся к списку админов группы
-    bot.edit_message_text(
-        f"👥 <b>АДМИНИСТРАТОРЫ ГРУППЫ</b>\n\nВыбери админа для удаления или добавь нового:",
-        user_id,
-        original_msg_id,
-        parse_mode="HTML",
-        reply_markup=admin_group_admins_keyboard(chat_id)
-    )
-
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 
 def background_tasks():
@@ -4539,7 +4464,7 @@ def background_tasks():
         now = now_msk()
         now_utc = datetime.now()
         
-        # Налог раз в сутки (в полночь)
+        # Налог раз в сутки
         if not last_tax or now.date() > last_tax.date():
             apply_rating_tax()
             last_tax = now
@@ -4554,7 +4479,7 @@ def background_tasks():
             last_reset = now
             save_data(data)
         
-        # Очистка неактивных пользователей (раз в сутки в полночь)
+        # Очистка раз в сутки в полночь
         if not last_cleanup or now.date() > last_cleanup.date():
             delete_inactive_users()
             cleanup_old_posts()
@@ -4583,7 +4508,6 @@ def background_tasks():
 # ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
 
 def check_if_already_running():
-    """Проверяет, не запущен ли уже бот"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.bind(("localhost", 9999))
