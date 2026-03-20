@@ -1,4 +1,4 @@
-# LowHigh v4.5 — ПОЛНАЯ ВЕРСИЯ С НОВЫМИ ФУНКЦИЯМИ
+# LowHigh v4.5 — ПОЛНАЯ ВЕРСИЯ С ИСПРАВЛЕНИЯМИ
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
@@ -15,11 +15,14 @@ import sys
 TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
 MASTER_ADMINS = [6656110482, 8525294722, 7760222795, 6618330805]
 OWNER_USERNAME = "@nickelium"
-OWNER_ID = 8525294722  # ID для авто-бэкапа
+OWNER_ID = 8525294722
 
 DATA_FILE = "bot_data.json"
 
 bot = telebot.TeleBot(TOKEN)
+
+# ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ==========
+maintenance_mode = False  # Режим тех. работ
 
 # ========== ВРЕМЯ (UTC+3 МСК) ==========
 def msk_time(dt=None):
@@ -93,7 +96,7 @@ def save_data(data):
     
     try:
         with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
         
         if os.path.exists(DATA_FILE):
             os.replace(DATA_FILE, backup_file)
@@ -166,8 +169,11 @@ def get_user(user_id):
         return None
     
     if user_id not in data["users"]:
-        # Новый пользователь — создаем квест на первый пост
         quest_deadline = now_msk() + timedelta(hours=24)
+        
+        if "first_post_quests" not in data:
+            data["first_post_quests"] = {}
+        
         data["first_post_quests"][user_id] = {
             "deadline": format_msk_time(quest_deadline),
             "completed": False,
@@ -205,6 +211,7 @@ def get_user(user_id):
             "my_posts": [],
             "post_history_data": {},
             "last_post_notification_sent": False,
+            "last_casino_notification_sent": False,
             "last_activity": now_msk(),
             "is_active": True,
             "first_post_quest_completed": False
@@ -219,13 +226,12 @@ def get_user(user_id):
         
         print_log("SUCCESS", f"Новый пользователь! ID: {user_id}")
         
-        # Отправляем приветствие с квестом
         try:
             bot.send_message(
                 int(user_id),
                 f"🎩 Добро пожаловать в LowHigh!\n\n"
                 f"📝 У тебя есть 24 часа, чтобы написать свой первый пост!\n\n"
-                f"✅ Выполни квест — получишь +2% к удаче или +5% к рейтингу!\n"
+                f"✅ Выполни квест — получишь +10% к рейтингу и +10% к удаче!\n"
                 f"⏳ Дедлайн: {(quest_deadline + timedelta(hours=3)).strftime('%d.%m.%Y %H:%M')}\n\n"
                 f"Напиши /post и отправь текст, чтобы начать!",
                 parse_mode="HTML"
@@ -249,34 +255,29 @@ def get_user(user_id):
     return data["users"][user_id]
 
 def check_first_post_quest(user_id):
-    """Проверяет квест на первый пост"""
     user_id = str(user_id)
+    
+    if "first_post_quests" not in data:
+        data["first_post_quests"] = {}
+    
     quest = data["first_post_quests"].get(user_id)
     
     if not quest:
         return
     
-    if quest["completed"]:
+    if quest.get("completed", False):
         return
     
     user = get_user(user_id)
     if not user:
         return
     
-    # Если пользователь уже написал пост
-    if user.get("total_posts", 0) > 0 and not quest["completed"]:
-        # Выполнение квеста
+    if user.get("total_posts", 0) > 0 and not quest.get("completed", False):
         quest["completed"] = True
         user["first_post_quest_completed"] = True
         
-        # Случайный бонус
-        bonus_type = random.choice(["luck", "rating"])
-        if bonus_type == "luck":
-            user["luck"] = min(50.0, user["luck"] + 2.0)
-            bonus_text = "🍀 Удача +2%"
-        else:
-            user["rating"] = min(95.0, user["rating"] + 5.0)
-            bonus_text = "📈 Рейтинг +5%"
+        user["rating"] = min(95.0, user["rating"] + 10.0)
+        user["luck"] = min(50.0, user["luck"] + 10.0)
         
         save_data(data)
         
@@ -284,7 +285,7 @@ def check_first_post_quest(user_id):
             bot.send_message(
                 int(user_id),
                 f"🎉 Поздравляю! Ты выполнил квест на первый пост!\n\n"
-                f"💰 Бонус: {bonus_text}\n\n"
+                f"💰 Бонус: +10% к рейтингу и +10% к удаче!\n\n"
                 f"📈 Твой рейтинг: {user['rating']:.1f}%\n"
                 f"🍀 Твоя удача: {user['luck']:.1f}%\n\n"
                 f"Продолжай писать посты и получать лайки!",
@@ -296,9 +297,8 @@ def check_first_post_quest(user_id):
         print_log("INFO", f"Пользователь {user_id} выполнил квест на первый пост")
         return
     
-    # Проверка дедлайна
-    deadline = parse_date(quest["deadline"])
-    if deadline and now_msk() > deadline and not quest["reminder_sent"]:
+    deadline = parse_date(quest.get("deadline"))
+    if deadline and now_msk() > deadline and not quest.get("reminder_sent", False):
         quest["reminder_sent"] = True
         save_data(data)
         
@@ -307,7 +307,7 @@ def check_first_post_quest(user_id):
                 int(user_id),
                 f"⚠️ Напоминание!\n\n"
                 f"У тебя осталось меньше 12 часов, чтобы написать первый пост!\n"
-                f"Напиши /post и отправь текст, чтобы получить бонус +2% к удаче или +5% к рейтингу!\n\n"
+                f"Напиши /post и отправь текст, чтобы получить +10% к рейтингу и +10% к удаче!\n\n"
                 f"⏳ Дедлайн: {(deadline + timedelta(hours=3)).strftime('%d.%m.%Y %H:%M')}",
                 parse_mode="HTML"
             )
@@ -370,7 +370,6 @@ def get_user_display_name(user_id, hide_username=True):
         return f"User_{user_id[-4:]}"
 
 def get_random_post():
-    """Возвращает случайный пост из истории для развлечения"""
     all_posts = []
     for uid, user in data["users"].items():
         if uid in data["banned_users"]:
@@ -494,9 +493,8 @@ def check_and_fix_rating(user_id):
         return True
     return False
 
-# ========== VIP ВСЕМ С РАЗНЫМИ БОНУСАМИ ==========
+# ========== VIP ВСЕМ С БОНУСОМ ==========
 def give_vip_to_all_with_bonus():
-    """Выдаёт VIP всем пользователям на сутки + случайный бонус"""
     count = 0
     until = now_msk() + timedelta(days=1)
     until_str = format_msk_time(until)
@@ -518,7 +516,6 @@ def give_vip_to_all_with_bonus():
         user["vip_until"] = until_str
         check_and_fix_rating(uid)
         
-        # Применяем бонус
         if selected_bonus["type"] == "rating":
             user["rating"] = min(95.0, user["rating"] + selected_bonus["value"])
         elif selected_bonus["type"] == "luck":
@@ -1259,7 +1256,6 @@ def cleanup_old_posts():
 # ========== АВТО-БЭКАП КАЖДЫЙ ЧАС ==========
 
 def send_auto_backup():
-    """Отправляет бэкап владельцу каждый час"""
     try:
         with open(DATA_FILE, 'rb') as f:
             bot.send_document(
@@ -1330,7 +1326,8 @@ def admin_main_keyboard():
         InlineKeyboardButton("👀 Поиск юзера", callback_data="admin_search_user"),
         InlineKeyboardButton("🎁 VIP всем", callback_data="admin_vip_all"),
         InlineKeyboardButton("💾 Бэкап", callback_data="admin_backup_menu"),
-        InlineKeyboardButton("🗑 Неактивные юзеры", callback_data="admin_inactive_users")
+        InlineKeyboardButton("🗑 Неактивные юзеры", callback_data="admin_inactive_users"),
+        InlineKeyboardButton("🔧 Тех. работы", callback_data="admin_maintenance")
     )
     return markup
 
@@ -1552,6 +1549,10 @@ def receive_backup_file(message):
 def start(message):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         bot.send_message(user_id, "🚫 Вы забанены в этом боте.")
         return
@@ -1561,10 +1562,8 @@ def start(message):
     user["username"] = message.from_user.username
     user["is_active"] = True
     
-    # Проверка квеста на первый пост
     check_first_post_quest(user_id)
     
-    # Обработка добавления в группу
     if message.chat.type in ["group", "supergroup"]:
         if add_group(message.chat.id, message.chat.title, user_id):
             bot.send_message(
@@ -1578,7 +1577,6 @@ def start(message):
             )
         return
     
-    # Обычный start в личке
     args = message.text.split()
     if len(args) > 1:
         ref = args[1]
@@ -1610,7 +1608,6 @@ def start(message):
     status = get_user_status_emoji(user_id)
     cd = get_post_cooldown(user_id)
     
-    # Проверка на активный квест первого поста
     first_post_quest = data["first_post_quests"].get(str(user_id), {})
     if not user.get("first_post_quest_completed") and not first_post_quest.get("completed"):
         deadline = parse_date(first_post_quest.get("deadline"))
@@ -1618,7 +1615,7 @@ def start(message):
             welcome = (WELCOME_TEXT + 
                        f"\n\n📝 У тебя есть квест на первый пост!\n"
                        f"⏳ Дедлайн: {(deadline + timedelta(hours=3)).strftime('%d.%m.%Y %H:%M')}\n"
-                       f"💰 Бонус: +2% к удаче или +5% к рейтингу\n\n"
+                       f"💰 Бонус: +10% к рейтингу и +10% к удаче\n\n"
                        f"Твой профиль:\n"
                        f"Статус: {status}\n"
                        f"📈 Рейтинг: {user['rating']:.1f}%\n"
@@ -1665,6 +1662,10 @@ def admin_panel(message):
 def cmd_post(message):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         bot.send_message(user_id, "🚫 Вы забанены")
         return
@@ -1700,6 +1701,10 @@ def cmd_post(message):
 def cmd_group_post(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
+    
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(chat_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
     
     if is_banned(user_id):
         bot.send_message(chat_id, "🚫 Вы забанены")
@@ -1746,6 +1751,10 @@ def cmd_group_post(message):
 def cmd_casino(message):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         return
     
@@ -1768,6 +1777,10 @@ def cmd_casino(message):
 @bot.message_handler(commands=['spin'])
 def cmd_spin(message):
     user_id = message.from_user.id
+    
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
     
     if is_banned(user_id):
         return
@@ -1835,6 +1848,10 @@ def cmd_spin(message):
 def cmd_top(message):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         return
     
@@ -1853,6 +1870,12 @@ def cmd_top(message):
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
+    user_id = message.from_user.id
+    
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     help_text = """
 📚 КОМАНДЫ LOWHIGH
 
@@ -1888,11 +1911,15 @@ def cmd_help(message):
 /backupsave - скачать бэкап базы
 /backupload - загрузить бэкап базы (только мастер-админ)
     """
-    bot.send_message(message.from_user.id, help_text, parse_mode="HTML")
+    bot.send_message(user_id, help_text, parse_mode="HTML")
 
 @bot.message_handler(commands=['convert'])
 def cmd_convert(message):
     user_id = message.from_user.id
+    
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
     
     if is_banned(user_id):
         return
@@ -1929,6 +1956,10 @@ def cmd_convert(message):
 def receive_group_post(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
+    
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(chat_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
     
     if is_banned(user_id):
         bot.send_message(chat_id, "🚫 Вы забанены")
@@ -2008,6 +2039,10 @@ def receive_group_post(message):
 def receive_post(message, post_type="user"):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         bot.send_message(user_id, "🚫 Вы забанены")
         return
@@ -2085,7 +2120,6 @@ def receive_post(message, post_type="user"):
     user["posts_count"] = user.get("posts_count", 0) + 1
     user["last_post_notification_sent"] = False
     
-    # Проверка квеста на первый пост
     check_first_post_quest(user_id)
     
     update_quest_progress(user_id, "post", 1)
@@ -2875,6 +2909,10 @@ def receive_interpol_post(message):
 def receive_hotline_message(message):
     user_id = message.from_user.id
     
+    if maintenance_mode and not is_admin(user_id):
+        bot.send_message(user_id, "🔧 Технические работы! Бот временно недоступен. Попробуйте позже.")
+        return
+    
     if is_banned(user_id):
         bot.send_message(user_id, "🚫 Вы забанены")
         return
@@ -3009,6 +3047,10 @@ def admin_search_user(message):
 def callback_handler(call):
     user_id = call.from_user.id
     user_id_str = str(user_id)
+    
+    if maintenance_mode and not is_admin(user_id) and call.data not in ["admin_maintenance", "admin_maintenance_confirm", "admin_maintenance_off"]:
+        bot.answer_callback_query(call.id, "🔧 Технические работы! Бот временно недоступен.")
+        return
     
     if is_banned(user_id) and not call.data.startswith("unban_"):
         bot.answer_callback_query(call.id, "Вы забанены", show_alert=True)
@@ -3185,6 +3227,81 @@ ID поста: {post_id}
             )
         )
         log_admin_action(user_id, "Выдал VIP всем с бонусом", f"{count} пользователей, бонус: {bonus_name}")
+    
+    # Режим тех. работ
+    elif data_cmd == "admin_maintenance":
+        if not is_admin(user_id):
+            return
+        
+        global maintenance_mode
+        if maintenance_mode:
+            maintenance_mode = False
+            bot.edit_message_text(
+                "✅ Режим технических работ ВЫКЛЮЧЕН!\n\n"
+                "Бот снова доступен для всех пользователей.",
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_main")
+                )
+            )
+            log_admin_action(user_id, "Выключил режим тех. работ")
+            
+            for uid in data["users"].keys():
+                if uid not in data["banned_users"]:
+                    try:
+                        bot.send_message(
+                            int(uid),
+                            "✅ Режим технических работ завершён!\n\nБот снова доступен для всех пользователей."
+                        )
+                    except:
+                        pass
+        else:
+            bot.edit_message_text(
+                "🔧 РЕЖИМ ТЕХНИЧЕСКИХ РАБОТ\n\n"
+                "Включить режим тех. работ?\n\n"
+                "⚠️ Все пользователи (кроме админов) получат сообщение о недоступности бота.\n"
+                "⚠️ Рассылка постов будет приостановлена.\n"
+                "⚠️ Администраторы смогут работать в панели.",
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(row_width=2).add(
+                    InlineKeyboardButton("✅ ВКЛЮЧИТЬ", callback_data="admin_maintenance_confirm"),
+                    InlineKeyboardButton("❌ ОТМЕНА", callback_data="admin_main")
+                )
+            )
+    
+    elif data_cmd == "admin_maintenance_confirm":
+        if not is_admin(user_id):
+            return
+        
+        global maintenance_mode
+        maintenance_mode = True
+        
+        bot.edit_message_text(
+            "🔧 РЕЖИМ ТЕХНИЧЕСКИХ РАБОТ ВКЛЮЧЕН!\n\n"
+            "Все пользователи (кроме админов) видят сообщение о недоступности бота.\n"
+            "Чтобы выключить режим, нажмите кнопку снова.",
+            user_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("🔧 Выключить тех. работы", callback_data="admin_maintenance")
+            )
+        )
+        log_admin_action(user_id, "Включил режим тех. работ")
+        
+        for uid in data["users"].keys():
+            if uid not in data["banned_users"] and not is_admin(uid):
+                try:
+                    bot.send_message(
+                        int(uid),
+                        "🔧 Технические работы! Бот временно недоступен.\n\nПопробуйте зайти позже."
+                    )
+                except:
+                    pass
     
     # АДМИНКА
     elif data_cmd == "admin_main":
@@ -4606,6 +4723,7 @@ def background_tasks():
     last_reset = None
     last_cleanup = None
     last_backup = None
+    last_maintenance_check = None
     
     while True:
         time.sleep(60)
@@ -4640,10 +4758,11 @@ def background_tasks():
             last_backup = now
         
         # Проверка квестов на первый пост
-        for uid in list(data["first_post_quests"].keys()):
-            check_first_post_quest(uid)
+        if "first_post_quests" in data:
+            for uid in list(data["first_post_quests"].keys()):
+                check_first_post_quest(uid)
         
-        # Уведомления о конце КД
+        # Уведомления о конце КД на посты
         for uid, user in data["users"].items():
             if user.get("last_post_time") and not user.get("last_post_notification_sent"):
                 can_post, _ = check_post_cooldown(user)
