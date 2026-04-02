@@ -1,4 +1,4 @@
-# LowHigh v5.1 — ИСПРАВЛЕНИЕ VIP-РАССЫЛКИ И ТЕХРАБОТ
+# LowHigh v5.2 — ПОЛНАЯ ВЕРСИЯ С ИСПРАВЛЕНИЯМИ VIP-РАССЫЛКИ И КЛИКАМИ ПО ССЫЛКАМ
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 import random
@@ -22,8 +22,8 @@ DATA_FILE = "bot_data.json"
 bot = telebot.TeleBot(TOKEN)
 
 # ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ==========
-maintenance_mode = False  # Режим тех. работ
-maintenance_message_id = None  # ID сообщения с уведомлением о техработах
+maintenance_mode = False
+maintenance_message_id = None
 
 # ========== ВРЕМЯ (UTC+3 МСК) ==========
 def msk_time(dt=None):
@@ -218,7 +218,8 @@ def get_user(user_id):
             "last_activity": now_msk(),
             "is_active": True,
             "first_post_quest_completed": False,
-            "guaranteed_win_used": False
+            "guaranteed_win_used": False,
+            "link_clicks": {}  # НОВОЕ: {post_id: [список user_id, кто нажал]}
         }
         today = now_msk().strftime("%Y-%m-%d")
         if "daily_stats" not in data["stats"]:
@@ -478,6 +479,32 @@ def check_and_fix_rating(user_id):
     if (is_vip(user_id) or is_verified(user_id)) and user["rating"] < 10.0:
         user["rating"] = 10.0
         save_data(data)
+        return True
+    return False
+
+# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ТРЕКИНГА КЛИКОВ ПО ССЫЛКЕ ==========
+def register_link_click(post_id, clicker_user_id, author_id):
+    """Регистрирует клик по ссылке в посте (только 1 раз с одного пользователя)"""
+    post_id_str = str(post_id)
+    author = get_user(author_id)
+    if not author:
+        return False
+    
+    if "link_clicks" not in author:
+        author["link_clicks"] = {}
+    
+    if post_id_str not in author["link_clicks"]:
+        author["link_clicks"][post_id_str] = []
+    
+    if str(clicker_user_id) not in author["link_clicks"][post_id_str]:
+        author["link_clicks"][post_id_str].append(str(clicker_user_id))
+        
+        # Обновляем в истории поста
+        if "post_history_data" in author and post_id_str in author["post_history_data"]:
+            author["post_history_data"][post_id_str]["link_clicks"] = len(author["link_clicks"][post_id_str])
+        
+        save_data(data)
+        print_log("INFO", f"Клик по ссылке в посте {post_id} от {clicker_user_id} -> +1 автору {author_id}")
         return True
     return False
 
@@ -895,7 +922,8 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
         "likes": 0,
         "dislikes": 0,
         "link_url": post.get("link_url", ""),
-        "link_text": post.get("link_text", "")
+        "link_text": post.get("link_text", ""),
+        "link_clicks": 0  # НОВОЕ: счётчик кликов по ссылке
     }
     
     # Сохраняем VIP-медиа в историю поста
@@ -905,6 +933,7 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
     
     for uid, user_data in guaranteed_recipients:
         try:
+            # Кнопки поста
             markup = InlineKeyboardMarkup(row_width=3)
             buttons = [
                 InlineKeyboardButton(f"👍 0", callback_data=f"like_{post_id}"),
@@ -914,8 +943,9 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
             if is_admin(uid):
                 buttons.append(InlineKeyboardButton("🚫 УДАЛИТЬ У ВСЕХ", callback_data=f"global_delete_{post_id}"))
             
+            # КНОВОЕ: кнопка со ссылкой с callback для отслеживания кликов
             if post.get("link_url") and post.get("link_text"):
-                buttons.append(InlineKeyboardButton(post["link_text"], url=post["link_url"]))
+                buttons.append(InlineKeyboardButton(post["link_text"], callback_data=f"link_click_{post_id}"))
             
             markup.add(*buttons)
             
@@ -934,6 +964,17 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
                     parse_mode="HTML",
                     reply_markup=markup
                 )
+            
+            # НОВОЕ: отдельным сообщением отправляем стикер/GIF
+            if post.get("vip_media") and post.get("vip_media_type"):
+                try:
+                    if post["vip_media_type"] == 'sticker':
+                        bot.send_sticker(int(uid), post["vip_media"])
+                    elif post["vip_media_type"] == 'gif':
+                        bot.send_animation(int(uid), post["vip_media"])
+                except:
+                    pass
+            
             sent += 1
             author["rating"] = min(95.0, author["rating"] + 0.01)
             data["post_history"][str(post_id)][str(uid)] = True
@@ -974,7 +1015,7 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
                     buttons.append(InlineKeyboardButton("🚫 УДАЛИТЬ У ВСЕХ", callback_data=f"global_delete_{post_id}"))
                 
                 if post.get("link_url") and post.get("link_text"):
-                    buttons.append(InlineKeyboardButton(post["link_text"], url=post["link_url"]))
+                    buttons.append(InlineKeyboardButton(post["link_text"], callback_data=f"link_click_{post_id}"))
                 
                 markup.add(*buttons)
                 
@@ -993,6 +1034,17 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
                         parse_mode="HTML",
                         reply_markup=markup
                     )
+                
+                # НОВОЕ: отдельным сообщением отправляем стикер/GIF
+                if post.get("vip_media") and post.get("vip_media_type"):
+                    try:
+                        if post["vip_media_type"] == 'sticker':
+                            bot.send_sticker(int(uid), post["vip_media"])
+                        elif post["vip_media_type"] == 'gif':
+                            bot.send_animation(int(uid), post["vip_media"])
+                    except:
+                        pass
+                
                 sent += 1
                 chance_hits += 1
                 author["rating"] = min(95.0, author["rating"] + 0.01)
@@ -1007,9 +1059,13 @@ def send_post_to_users(post, admin_id, force_all=False, media=None):
     print_log("POST", f"✅ Пост доставлен {sent}/{total} юзерам ({percent_delivered:.1f}%)")
     
     try:
+        vip_media_text = ""
+        if post.get("vip_media") and post.get("vip_media_type"):
+            vip_media_text = "\n\n🎬 Дополнительный стикер/GIF отправлен вместе с постом!"
+        
         bot.send_message(
             int(from_user_id),
-            f"✅ Твой пост разослан!\n\n"
+            f"✅ Твой пост разослан!{vip_media_text}\n\n"
             f"📊 Статистика доставки:\n"
             f"👥 Всего пользователей: {total}\n"
             f"✅ Доставлено всего: {sent}\n"
@@ -1066,7 +1122,7 @@ def update_post_reactions_buttons(post_id, chat_id, message_id):
     ]
     
     if post_info.get("link_url") and post_info.get("link_text"):
-        buttons.append(InlineKeyboardButton(post_info["link_text"], url=post_info["link_url"]))
+        buttons.append(InlineKeyboardButton(post_info["link_text"], callback_data=f"link_click_{post_id}"))
     
     markup.add(*buttons)
     
@@ -1489,8 +1545,9 @@ def post_history_keyboard(user):
         if data_post:
             short = data_post["text"][:30] + "..." if len(data_post["text"]) > 30 else data_post["text"]
             date = data_post["date"][:10] if data_post.get("date") else "?"
+            clicks = data_post.get("link_clicks", 0)
             markup.add(InlineKeyboardButton(
-                f"📝 {short} [{data_post.get('likes',0)}👍] {date}",
+                f"📝 {short} [{data_post.get('likes',0)}👍] [{clicks}🔗] {date}",
                 callback_data=f"history_post_{pid}"
             ))
     markup.add(InlineKeyboardButton("◀️ Назад", callback_data="main_menu"))
@@ -1722,7 +1779,7 @@ def admin_panel(message):
     )
     log_admin_action(user_id, "Вошёл в админ-панель")
 
-# НОВОЕ: переменные для хранения состояния создания поста
+# Переменные для хранения состояния создания поста
 user_post_states = {}
 
 @bot.message_handler(commands=['post'])
@@ -1766,7 +1823,7 @@ def cmd_post(message):
     bot.send_message(
         user_id,
         f"📊 Прогноз доставки в личку: {prediction:.1f}%\n\n"
-        f"📝 ШАГ 1/3: Отправь текст поста (максимум {max_len} символов, можно с картинкой):",
+        f"📝 ШАГ 1/4: Отправь текст поста (максимум {max_len} символов, можно с картинкой):",
         parse_mode="HTML",
         reply_markup=cancel_keyboard()
     )
@@ -1833,7 +1890,7 @@ def receive_post_text(message):
     bot.send_message(
         user_id,
         f"✅ Текст поста принят!\n\n"
-        f"📎 ШАГ 2/3: Отправь ССЫЛКУ (URL), на которую будет вести кнопка под постом.\n"
+        f"📎 ШАГ 2/4: Отправь ССЫЛКУ (URL), на которую будет вести кнопка под постом.\n"
         f"Пример: https://t.me/username или https://example.com\n\n"
         f"Если ссылка не нужна, отправь '-' (дефис).",
         parse_mode="HTML",
@@ -1872,7 +1929,7 @@ def receive_post_link(message):
     bot.send_message(
         user_id,
         f"✅ Ссылка принята!\n\n"
-        f"📝 ШАГ 3/3: Отправь ТЕКСТ КНОПКИ (например, 'Перейти', 'Подробнее' и т.д.).\n"
+        f"📝 ШАГ 3/4: Отправь ТЕКСТ КНОПКИ (например, 'Перейти', 'Подробнее' и т.д.).\n"
         f"Максимум 30 символов.\n\n"
         f"Если кнопка не нужна, отправь '-' (дефис).",
         parse_mode="HTML",
@@ -1925,7 +1982,7 @@ def receive_post_button_text(message):
         bot.send_message(
             user_id,
             f"✅ Текст кнопки принят!\n\n"
-            f"🎬 ШАГ 4/4 (VIP): Отправь СТИКЕР или GIF-файл, который будет прикреплён к посту.\n"
+            f"🎬 ШАГ 4/4 (VIP): Отправь СТИКЕР или GIF-файл, который будет отправлен ОТДЕЛЬНЫМ сообщением после поста.\n"
             f"Это необязательно. Если ничего не нужно, отправь '-' (дефис).",
             parse_mode="HTML",
             reply_markup=cancel_keyboard()
@@ -2026,16 +2083,6 @@ def finalize_post(message, state):
     if len(text) > 200:
         update_quest_progress(user_id, "post_length", 200, extra=len(text))
     
-    # Отправляем VIP-медиа отдельным сообщением, если есть
-    if state.get("vip_media") and state.get("vip_media_type"):
-        try:
-            if state["vip_media_type"] == 'sticker':
-                bot.send_sticker(user_id, state["vip_media"])
-            elif state["vip_media_type"] == 'gif':
-                bot.send_animation(user_id, state["vip_media"])
-        except:
-            pass
-    
     if is_admin(user_id) or is_verified(user_id):
         sent = send_post_to_users(post, user_id, media=media)
         bot.send_message(
@@ -2044,8 +2091,6 @@ def finalize_post(message, state):
             parse_mode="HTML",
             reply_markup=main_keyboard()
         )
-        if state.get("vip_media"):
-            bot.send_message(user_id, "🎬 Дополнительный стикер/GIF отправлен вместе с постом!")
         user["total_posts"] += 1
         save_data(data)
     else:
@@ -2060,9 +2105,6 @@ def finalize_post(message, state):
             reply_markup=main_keyboard()
         )
         
-        if state.get("vip_media"):
-            bot.send_message(user_id, "🎬 Дополнительный стикер/GIF будет отправлен вместе с постом после одобрения!")
-        
         print_log("POST", f"Новый пост от {get_user_display_name(user_id, hide_username=False)}")
         
         for admin_id in data.get("admins", []):
@@ -2071,40 +2113,32 @@ def finalize_post(message, state):
                 if admin and admin.get("admin_notifications", True):
                     try:
                         # Отправляем админу пост с VIP-медиа, если есть
+                        markup = InlineKeyboardMarkup()
+                        if link_url and link_text:
+                            markup.add(InlineKeyboardButton(link_text, url=link_url))
+                        
+                        if media:
+                            bot.send_photo(
+                                int(admin_id),
+                                media,
+                                caption=f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
+                                parse_mode="HTML",
+                                reply_markup=markup if markup.keyboard else None
+                            )
+                        else:
+                            bot.send_message(
+                                int(admin_id),
+                                f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
+                                parse_mode="HTML",
+                                reply_markup=markup if markup.keyboard else None
+                            )
+                        
+                        # Отправляем стикер/GIF отдельным сообщением
                         if state.get("vip_media") and state.get("vip_media_type"):
-                            # Сначала отправляем текст поста
-                            if media:
-                                bot.send_photo(
-                                    int(admin_id),
-                                    media,
-                                    caption=f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
-                                    parse_mode="HTML"
-                                )
-                            else:
-                                bot.send_message(
-                                    int(admin_id),
-                                    f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
-                                    parse_mode="HTML"
-                                )
-                            # Затем отправляем стикер/GIF
                             if state["vip_media_type"] == 'sticker':
                                 bot.send_sticker(int(admin_id), state["vip_media"])
                             elif state["vip_media_type"] == 'gif':
                                 bot.send_animation(int(admin_id), state["vip_media"])
-                        else:
-                            if media:
-                                bot.send_photo(
-                                    int(admin_id),
-                                    media,
-                                    caption=f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
-                                    parse_mode="HTML"
-                                )
-                            else:
-                                bot.send_message(
-                                    int(admin_id),
-                                    f"🆕 Новый пост от {get_user_display_name(user_id, hide_username=False)}!\n\n{text[:300]}...\n\n/admin - для модерации",
-                                    parse_mode="HTML"
-                                )
                     except:
                         pass
 
@@ -3127,44 +3161,38 @@ def receive_reject_reason(message, post_data, post_index):
         vip_media = "🎬" if next_post.get("vip_media") else ""
         text = f"📝 Следующий пост от {author}\n\n{has_media}{vip_media} {next_post['text']}"
         
-        # Отправляем админу пост с VIP-медиа, если есть
-        if next_post.get("vip_media") and next_post.get("vip_media_type"):
-            if next_post.get("media"):
-                bot.send_photo(
-                    user_id,
-                    next_post["media"],
-                    caption=text,
-                    parse_mode="HTML",
-                    reply_markup=admin_post_actions_keyboard(next_post['id'])
-                )
-            else:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode="HTML",
-                    reply_markup=admin_post_actions_keyboard(next_post['id'])
-                )
-            # Отправляем стикер/GIF
-            if next_post["vip_media_type"] == 'sticker':
-                bot.send_sticker(user_id, next_post["vip_media"])
-            elif next_post["vip_media_type"] == 'gif':
-                bot.send_animation(user_id, next_post["vip_media"])
+        # Создаём кнопку со ссылкой для админа
+        markup = None
+        if next_post.get("link_url") and next_post.get("link_text"):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton(next_post["link_text"], url=next_post["link_url"]))
+        
+        if next_post.get("media"):
+            bot.send_photo(
+                user_id,
+                next_post["media"],
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=admin_post_actions_keyboard(next_post['id']),
+                disable_notification=True
+            )
         else:
-            if next_post.get("media"):
-                bot.send_photo(
-                    user_id,
-                    next_post["media"],
-                    caption=text,
-                    parse_mode="HTML",
-                    reply_markup=admin_post_actions_keyboard(next_post['id'])
-                )
-            else:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode="HTML",
-                    reply_markup=admin_post_actions_keyboard(next_post['id'])
-                )
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode="HTML",
+                reply_markup=admin_post_actions_keyboard(next_post['id'])
+            )
+        
+        # Отправляем стикер/GIF отдельно, если есть
+        if next_post.get("vip_media") and next_post.get("vip_media_type"):
+            try:
+                if next_post["vip_media_type"] == 'sticker':
+                    bot.send_sticker(user_id, next_post["vip_media"])
+                elif next_post["vip_media_type"] == 'gif':
+                    bot.send_animation(user_id, next_post["vip_media"])
+            except:
+                pass
     else:
         bot.send_message(
             user_id,
@@ -3604,7 +3632,6 @@ def set_group_delivery_coefficient(message):
             parse_mode="HTML"
         )
 
-# НОВОЕ: функция для управления техработами
 def admin_maintenance(call):
     user_id = call.from_user.id
     
@@ -3615,10 +3642,8 @@ def admin_maintenance(call):
     global maintenance_mode, maintenance_message_id
     
     if not maintenance_mode:
-        # Включаем режим техработ
         maintenance_mode = True
         
-        # Отправляем уведомление во все чаты, где есть бот
         for admin_id in data.get("admins", []):
             try:
                 msg = bot.send_message(
@@ -3639,7 +3664,6 @@ def admin_maintenance(call):
         bot.answer_callback_query(call.id, "✅ Режим техработ включен")
         log_admin_action(user_id, "Включил режим техработ")
         
-        # Обновляем сообщение в админке
         bot.edit_message_text(
             "👑 АДМИН-ПАНЕЛЬ\n\nВыбери раздел:\n\n🔧 РЕЖИМ ТЕХРАБОТ ВКЛЮЧЕН",
             user_id,
@@ -3661,7 +3685,6 @@ def admin_maintenance_off(call):
     
     maintenance_mode = False
     
-    # Отправляем уведомление админам
     for admin_id in data.get("admins", []):
         try:
             bot.send_message(
@@ -3676,7 +3699,6 @@ def admin_maintenance_off(call):
     bot.answer_callback_query(call.id, "✅ Режим техработ выключен")
     log_admin_action(user_id, "Выключил режим техработ")
     
-    # Обновляем сообщение в админке
     bot.edit_message_text(
         "👑 АДМИН-ПАНЕЛЬ\n\nВыбери раздел:",
         user_id,
@@ -3690,7 +3712,6 @@ def callback_handler(call):
     user_id = call.from_user.id
     user_id_str = str(user_id)
     
-    # Проверка техработ (пропускаем админов и кнопки управления техработами)
     if maintenance_mode and not is_admin(user_id) and call.data not in ["admin_maintenance", "admin_maintenance_off"]:
         bot.answer_callback_query(call.id, "🔧 Технические работы! Бот временно недоступен.")
         return
@@ -3704,6 +3725,31 @@ def callback_handler(call):
         return
     
     data_cmd = call.data
+    
+    # НОВОЕ: обработка клика по ссылке
+    if data_cmd.startswith("link_click_"):
+        post_id = data_cmd.split("_")[2]
+        post_info = data["post_contents"].get(str(post_id), {})
+        author_id = post_info.get("author_id")
+        
+        if author_id:
+            registered = register_link_click(post_id, user_id, author_id)
+            if registered:
+                bot.answer_callback_query(call.id, "🔗 Переход засчитан! Спасибо!")
+                # Открываем реальную ссылку
+                link_url = post_info.get("link_url")
+                if link_url:
+                    try:
+                        bot.answer_callback_query(call.id, text=f"Переход по ссылке", show_alert=False)
+                        # Имитируем открытие ссылки через веб-вью
+                        bot.send_message(user_id, f"🔗 [Нажмите для перехода]({link_url})", parse_mode="Markdown")
+                    except:
+                        pass
+            else:
+                bot.answer_callback_query(call.id, "🔗 Вы уже переходили по этой ссылке")
+        else:
+            bot.answer_callback_query(call.id, "❌ Ошибка")
+        return
     
     # Реакции на посты
     if data_cmd.startswith("like_"):
@@ -4225,50 +4271,45 @@ ID поста: {post_id}
                 vip_media = "🎬" if post.get("vip_media") else ""
                 text = f"📝 Пост от {author}\n\n{has_media}{vip_media} {post['text']}"
                 
-                # Отправляем пост с VIP-медиа, если есть
-                if post.get("vip_media") and post.get("vip_media_type"):
-                    if post.get("media"):
-                        bot.edit_message_media(
-                            InputMediaPhoto(
-                                post["media"],
-                                caption=text
-                            ),
-                            user_id,
-                            call.message.message_id,
-                            reply_markup=admin_post_actions_keyboard(post_id)
-                        )
-                    else:
-                        bot.edit_message_text(
-                            text,
-                            user_id,
-                            call.message.message_id,
-                            parse_mode="HTML",
-                            reply_markup=admin_post_actions_keyboard(post_id)
-                        )
-                    # Отправляем стикер/GIF отдельно
-                    if post["vip_media_type"] == 'sticker':
-                        bot.send_sticker(user_id, post["vip_media"])
-                    elif post["vip_media_type"] == 'gif':
-                        bot.send_animation(user_id, post["vip_media"])
+                # Создаём кнопку со ссылкой для админа
+                markup = None
+                if post.get("link_url") and post.get("link_text"):
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton(post["link_text"], url=post["link_url"]))
+                    # Добавляем кнопки модерации
+                    for btn in admin_post_actions_keyboard(post_id).keyboard[0]:
+                        markup.add(btn)
                 else:
-                    if post.get("media"):
-                        bot.edit_message_media(
-                            InputMediaPhoto(
-                                post["media"],
-                                caption=text
-                            ),
-                            user_id,
-                            call.message.message_id,
-                            reply_markup=admin_post_actions_keyboard(post_id)
-                        )
-                    else:
-                        bot.edit_message_text(
-                            text,
-                            user_id,
-                            call.message.message_id,
-                            parse_mode="HTML",
-                            reply_markup=admin_post_actions_keyboard(post_id)
-                        )
+                    markup = admin_post_actions_keyboard(post_id)
+                
+                if post.get("media"):
+                    bot.edit_message_media(
+                        InputMediaPhoto(
+                            post["media"],
+                            caption=text
+                        ),
+                        user_id,
+                        call.message.message_id,
+                        reply_markup=markup
+                    )
+                else:
+                    bot.edit_message_text(
+                        text,
+                        user_id,
+                        call.message.message_id,
+                        parse_mode="HTML",
+                        reply_markup=markup
+                    )
+                
+                # Отправляем стикер/GIF отдельно, если есть
+                if post.get("vip_media") and post.get("vip_media_type"):
+                    try:
+                        if post["vip_media_type"] == 'sticker':
+                            bot.send_sticker(user_id, post["vip_media"])
+                        elif post["vip_media_type"] == 'gif':
+                            bot.send_animation(user_id, post["vip_media"])
+                    except:
+                        pass
                 break
     
     elif data_cmd.startswith("approve_"):
@@ -4290,19 +4331,7 @@ ID поста: {post_id}
             bot.answer_callback_query(call.id, "Пост не найден")
             return
         
-        # Отправляем пост
         sent = send_post_to_users(post_data, user_id, media=post_data.get("media"))
-        
-        # Отправляем VIP-медиа отдельным сообщением автору
-        if post_data.get("vip_media") and post_data.get("vip_media_type"):
-            try:
-                author_id = int(post_data["user_id"])
-                if post_data["vip_media_type"] == 'sticker':
-                    bot.send_sticker(author_id, post_data["vip_media"])
-                elif post_data["vip_media_type"] == 'gif':
-                    bot.send_animation(author_id, post_data["vip_media"])
-            except:
-                pass
         
         data["posts"].pop(idx)
         save_data(data)
@@ -4330,50 +4359,43 @@ ID поста: {post_id}
             vip_media = "🎬" if next_post.get("vip_media") else ""
             text = f"✅ Пост одобрен. Доставлено: {sent}\n\n📝 Следующий пост от {author}\n\n{has_media}{vip_media} {next_post['text']}"
             
-            # Отправляем следующий пост с VIP-медиа, если есть
-            if next_post.get("vip_media") and next_post.get("vip_media_type"):
-                if next_post.get("media"):
-                    bot.edit_message_media(
-                        InputMediaPhoto(
-                            next_post["media"],
-                            caption=text
-                        ),
-                        user_id,
-                        call.message.message_id,
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
-                else:
-                    bot.edit_message_text(
-                        text,
-                        user_id,
-                        call.message.message_id,
-                        parse_mode="HTML",
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
-                # Отправляем стикер/GIF
-                if next_post["vip_media_type"] == 'sticker':
-                    bot.send_sticker(user_id, next_post["vip_media"])
-                elif next_post["vip_media_type"] == 'gif':
-                    bot.send_animation(user_id, next_post["vip_media"])
+            # Создаём кнопку со ссылкой для админа
+            markup = None
+            if next_post.get("link_url") and next_post.get("link_text"):
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton(next_post["link_text"], url=next_post["link_url"]))
+                for btn in admin_post_actions_keyboard(next_post['id']).keyboard[0]:
+                    markup.add(btn)
             else:
-                if next_post.get("media"):
-                    bot.edit_message_media(
-                        InputMediaPhoto(
-                            next_post["media"],
-                            caption=text
-                        ),
-                        user_id,
-                        call.message.message_id,
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
-                else:
-                    bot.edit_message_text(
-                        text,
-                        user_id,
-                        call.message.message_id,
-                        parse_mode="HTML",
-                        reply_markup=admin_post_actions_keyboard(next_post['id'])
-                    )
+                markup = admin_post_actions_keyboard(next_post['id'])
+            
+            if next_post.get("media"):
+                bot.edit_message_media(
+                    InputMediaPhoto(
+                        next_post["media"],
+                        caption=text
+                    ),
+                    user_id,
+                    call.message.message_id,
+                    reply_markup=markup
+                )
+            else:
+                bot.edit_message_text(
+                    text,
+                    user_id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+            
+            if next_post.get("vip_media") and next_post.get("vip_media_type"):
+                try:
+                    if next_post["vip_media_type"] == 'sticker':
+                        bot.send_sticker(user_id, next_post["vip_media"])
+                    elif next_post["vip_media_type"] == 'gif':
+                        bot.send_animation(user_id, next_post["vip_media"])
+                except:
+                    pass
         else:
             bot.edit_message_text(
                 f"✅ Пост одобрен. Доставлено: {sent}\n\n📭 Больше нет постов.",
@@ -5061,7 +5083,7 @@ ID поста: {post_id}
         bot.send_message(
             user_id,
             f"📊 Прогноз доставки в личку: {pred:.1f}%\n\n"
-            f"📝 ШАГ 1/3: Отправь текст поста (максимум {max_len} символов, можно с картинкой):",
+            f"📝 ШАГ 1/4: Отправь текст поста (максимум {max_len} символов, можно с картинкой):",
             parse_mode="HTML",
             reply_markup=cancel_keyboard()
         )
@@ -5363,6 +5385,7 @@ ID поста: {post_id}
             bot.answer_callback_query(call.id, "Пост не найден")
             return
         
+        clicks = post_data.get("link_clicks", 0)
         text = f"""
 📝 Пост от {post_data.get('date', '?')[:10]}
 
@@ -5370,6 +5393,7 @@ ID поста: {post_id}
 
 👍 Лайков: {post_data.get('likes', 0)}
 👎 Дизлайков: {post_data.get('dislikes', 0)}
+🔗 Переходов по ссылке: {clicks}
         """
         bot.send_message(
             user_id,
@@ -5402,13 +5426,15 @@ ID поста: {post_id}
             "text": post_data["text"],
             "time": format_msk_time(datetime.now()),
             "link_url": post_data.get("link_url", ""),
-            "link_text": post_data.get("link_text", "")
+            "link_text": post_data.get("link_text", ""),
+            "vip_media": post_data.get("vip_media"),
+            "vip_media_type": post_data.get("vip_media_type")
         }
         
         user["last_post_time"] = format_msk_time(datetime.now())
         user["posts_count"] = user.get("posts_count", 0) + 1
         
-        sent = send_post_to_users(new_post, user_id)
+        sent = send_post_to_users(new_post, user_id, media=post_data.get("media"))
         user["total_posts"] += 1
         save_data(data)
         
@@ -5488,7 +5514,7 @@ ID поста: {post_id}
 📌 Тип: Некоммерческая рассылка
 🚫 Важно: Коммерческие проекты не рекламировать!
 
-📊 Версия бота: 5.1
+📊 Версия бота: 5.2
         """
         bot.send_message(
             user_id,
@@ -5513,13 +5539,11 @@ def background_tasks():
         now = now_msk()
         now_utc = datetime.now()
         
-        # Налог раз в сутки в полночь
         if not data.get("last_tax_date") or now.date() > parse_date(data["last_tax_date"]).date():
             apply_rating_tax()
             data["last_tax_date"] = format_msk_time(now)
             save_data(data)
         
-        # Сброс активности в субботу
         if now.weekday() == 5 and (not last_reset or last_reset.date() != now.date()):
             for u in data["users"].values():
                 u["weekly_activity"] = 0
@@ -5529,23 +5553,19 @@ def background_tasks():
             last_reset = now
             save_data(data)
         
-        # Очистка раз в сутки в полночь
         if not last_cleanup or now.date() > last_cleanup.date():
             deactivate_inactive_users()
             cleanup_old_posts()
             last_cleanup = now
         
-        # Авто-бэкап каждый час
         if not last_backup or now.hour != last_backup.hour:
             send_auto_backup()
             last_backup = now
         
-        # Проверка квестов на первый пост
         if "first_post_quests" in data:
             for uid in list(data["first_post_quests"].keys()):
                 check_first_post_quest(uid)
         
-        # Уведомления о конце КД на посты
         for uid, user in data["users"].items():
             if user.get("last_post_time") and not user.get("last_post_notification_sent"):
                 can_post, _ = check_post_cooldown(user)
@@ -5561,7 +5581,6 @@ def background_tasks():
                     except:
                         pass
         
-        # Уведомления о конце КД на казино
         for uid, user in data["users"].items():
             if user.get("last_casino") and not user.get("last_casino_notification_sent", False):
                 can_play, _ = check_casino_cooldown(user)
@@ -5577,7 +5596,6 @@ def background_tasks():
                     except:
                         pass
         
-        # Сохранение каждые 5 минут
         if now_utc.minute % 5 == 0:
             save_data(data)
 
@@ -5598,7 +5616,7 @@ if __name__ == "__main__":
     
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v5.1")
+    print("     LowHigh v5.2")
     print("="*50)
     print(f"{Colors.END}")
     
