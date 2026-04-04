@@ -1,4 +1,4 @@
-# LowHigh v5.3 — ИСПРАВЛЕННАЯ ВЕРСИЯ С УЛУЧШЕНИЯМИ
+# LowHigh v5.4 — ИСПРАВЛЕННАЯ ВЕРСИЯ
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 import random
@@ -10,6 +10,7 @@ import threading
 import re
 import socket
 import sys
+import html  # Добавлено для экранирования HTML
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8265086577:AAFqojYbFSIRE2FZg0jnJ0Qgzdh0w9_j6z4"
@@ -154,13 +155,13 @@ def load_data():
             "daily_stats": {}
         },
         "post_reactions": {},
-        "deleted_users_log": [],
+        "deleted_users_log": [],  # Инициализируем сразу
         "last_tax_date": None,
         "first_post_quests": {},
         "delivery_coefficient": 0,
         "group_delivery_coefficient": 0,
-        "complaints": [],  # НОВОЕ: список жалоб
-        "hotline_messages": []  # НОВОЕ: список сообщений с горячей линии
+        "complaints": [],
+        "hotline_messages": []
     }
 
 data = load_data()
@@ -363,19 +364,17 @@ def get_user_display_name(user_id, hide_username=True):
     if not user:
         return "Неизвестно"
     
-    # Исправление №13: показываем ID если нет имени и username скрыт
     if hide_username:
         if user.get("first_name"):
             return user["first_name"]
         if user.get("username"):
             return user["username"]
-        return f"User_{user_id[-4:]}"  # Оставляем как было, но это читаемо
+        return f"User_{user_id[-4:]}"
     else:
         if user.get("username"):
             return "@" + user["username"]
         if user.get("first_name"):
             return user["first_name"]
-        # Для отображения с ID (админам)
         return f"ID:{user_id}"
 
 def get_random_post():
@@ -510,20 +509,45 @@ def register_link_click(post_id, clicker_user_id, author_id):
         return True
     return False
 
-# ========== VIP ВСЕМ С БОНУСОМ (УЛУЧШЕНА) ==========
+# ========== ОБРАБОТКА ССЫЛОК С @username (п.5) ==========
+def process_link_url(link):
+    """Преобразует @username в ссылку Telegram"""
+    if not link or link == "-":
+        return ""
+    
+    # Если ссылка начинается с @, преобразуем
+    if link.startswith('@'):
+        username = link[1:]
+        return f"https://t.me/{username}"
+    
+    # Если просто username без @
+    if not link.startswith(('http://', 'https://', 't.me/')):
+        # Проверяем, похоже ли на username (только буквы, цифры, подчеркивание)
+        if re.match(r'^[a-zA-Z0-9_]+$', link):
+            return f"https://t.me/{link}"
+    
+    # Уже корректная ссылка
+    if link.startswith('http://') or link.startswith('https://'):
+        return link
+    
+    if link.startswith('t.me/'):
+        return f"https://{link}"
+    
+    return ""
+
+# ========== VIP ВСЕМ С БОНУСОМ ==========
 def give_vip_to_all_with_bonus():
     count = 0
     until = now_msk() + timedelta(days=1)
     until_str = format_msk_time(until)
     
-    # Улучшенный список бонусов (п.3)
     bonuses = [
         {"name": "📈 +10% к рейтингу", "type": "rating", "value": 10},
         {"name": "🍀 +2% к удаче", "type": "luck", "value": 2},
         {"name": "🎰 Бесплатная крутка казино", "type": "free_spin", "value": 1},
         {"name": "🔇 Глушитель на сутки", "type": "silencer", "value": 24},
         {"name": "🍀 Амулет удачи", "type": "amulet", "value": 1},
-        {"name": "📝 +3 поста в лимит", "type": "extra_posts", "value": 3}  # Новый бонус
+        {"name": "📝 +3 поста в лимит", "type": "extra_posts", "value": 3}
     ]
     
     selected_bonus = random.choice(bonuses)
@@ -657,7 +681,6 @@ def send_group_post(post, admin_id, media=None):
     
     author_emoji = get_user_status_emoji(from_user_id)
     
-    # Создаем клавиатуру для группового поста (п.5)
     markup = InlineKeyboardMarkup(row_width=3)
     buttons = [
         InlineKeyboardButton(f"👍 0", callback_data=f"like_{post_id}"),
@@ -1100,10 +1123,8 @@ def delete_post_globally(post_id):
     if pid not in data["post_history"]:
         return 0
     cnt = 0
-    # Удаляем у всех, включая отправителя (п.16)
     for uid in data["post_history"][pid].keys():
         cnt += 1
-        # Удаляем из истории постов пользователя
         user = data["users"].get(uid)
         if user and "my_posts" in user and pid in user["my_posts"]:
             user["my_posts"].remove(pid)
@@ -1295,6 +1316,10 @@ def apply_rating_tax():
 # ========== ОЧИСТКА НЕАКТИВНЫХ ==========
 
 def deactivate_inactive_users():
+    # Инициализируем ключ, если его нет (исправление ошибки KeyError)
+    if "deleted_users_log" not in data:
+        data["deleted_users_log"] = []
+    
     now = now_msk()
     cutoff = now - timedelta(days=7)
     deactivated = 0
@@ -1373,6 +1398,73 @@ def send_auto_backup():
     except Exception as e:
         print_log("ERROR", f"Ошибка отправки авто-бэкапа: {e}")
 
+# ========== УВЕДОМЛЕНИЯ АДМИНАМ РАЗ В 2 ЧАСА (п.3) ==========
+def send_admin_summary():
+    """Отправляет админам сводку раз в 2 часа"""
+    posts_count = len(data.get("posts", []))
+    complaints_count = len(data.get("complaints", []))
+    hotline_count = len(data.get("hotline_messages", []))
+    
+    if posts_count == 0 and complaints_count == 0 and hotline_count == 0:
+        return
+    
+    text = f"""
+📊 **СВОДКА ДЛЯ АДМИНИСТРАТОРОВ**
+
+⏰ Время: {format_msk_time(datetime.now())}
+
+📝 Ожидают проверки: **{posts_count}** постов
+⚠️ Новых жалоб: **{complaints_count}**
+📞 Сообщений на горячей линии: **{hotline_count}**
+
+Используйте /admin для просмотра.
+"""
+    
+    for admin_id in data.get("admins", []):
+        try:
+            bot.send_message(int(admin_id), text, parse_mode="Markdown")
+        except:
+            pass
+    
+    print_log("INFO", f"Отправлена сводка админам: постов={posts_count}, жалоб={complaints_count}, горячая линия={hotline_count}")
+
+# ========== ИНТЕРПОЛ-РАССЫЛКА В ГРУППЫ (п.7) ==========
+def send_interpol_to_groups(post):
+    """Отправляет интерпол-рассылку во все группы"""
+    if "groups" not in data or not data["groups"]:
+        return 0
+    
+    from_user_id = post["user_id"]
+    author_emoji = get_user_status_emoji(from_user_id)
+    post_id = post["id"]
+    
+    markup = InlineKeyboardMarkup(row_width=3)
+    buttons = [
+        InlineKeyboardButton(f"👍 0", callback_data=f"like_{post_id}"),
+        InlineKeyboardButton(f"👎 0", callback_data=f"dislike_{post_id}"),
+        InlineKeyboardButton("⚠️", callback_data=f"complaint_{post_id}")
+    ]
+    if post.get("link_url") and post.get("link_text"):
+        buttons.append(InlineKeyboardButton(post["link_text"], callback_data=f"link_click_{post_id}"))
+    markup.add(*buttons)
+    
+    sent = 0
+    for chat_id in data["groups"].keys():
+        try:
+            if post.get("media"):
+                caption = f"📢 ИНТЕРПОЛ {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}"
+                if post.get("text"):
+                    caption += f":\n\n{post['text']}"
+                bot.send_photo(int(chat_id), post["media"], caption=caption, parse_mode="HTML", reply_markup=markup)
+            else:
+                text = f"📢 ИНТЕРПОЛ {author_emoji} от {get_user_display_name(from_user_id, hide_username=False)}:\n\n{post['text']}"
+                bot.send_message(int(chat_id), text, parse_mode="HTML", reply_markup=markup)
+            sent += 1
+        except Exception as e:
+            print_log("ERROR", f"Ошибка отправки интерпола в группу {chat_id}: {e}")
+    
+    return sent
+
 # ========== КЛАВИАТУРЫ ==========
 
 def main_keyboard():
@@ -1419,8 +1511,8 @@ def admin_main_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("📝 Посты на модерации", callback_data="admin_posts_list"),
-        InlineKeyboardButton("⚠️ Жалобы", callback_data="admin_complaints_list"),  # НОВОЕ
-        InlineKeyboardButton("📞 Горячая линия", callback_data="admin_hotline_list"),  # НОВОЕ
+        InlineKeyboardButton("⚠️ Жалобы", callback_data="admin_complaints_list"),
+        InlineKeyboardButton("📞 Горячая линия", callback_data="admin_hotline_list"),
         InlineKeyboardButton("📢 Интерпол-рассылка", callback_data="admin_interpol"),
         InlineKeyboardButton("👑 VIP управление", callback_data="admin_vip_list"),
         InlineKeyboardButton("✅ Вериф управление", callback_data="admin_verified_list"),
@@ -1437,7 +1529,7 @@ def admin_main_keyboard():
         InlineKeyboardButton("🗑 Неактивные юзеры", callback_data="admin_inactive_users"),
         InlineKeyboardButton("⚙️ Коэффициенты", callback_data="admin_coefficients"),
         InlineKeyboardButton("🔧 Тех. работы", callback_data="admin_maintenance"),
-        InlineKeyboardButton("ℹ️ /dinfo", callback_data="admin_dinfo")  # НОВОЕ
+        InlineKeyboardButton("ℹ️ /dinfo", callback_data="admin_dinfo")
     )
     return markup
 
@@ -1455,10 +1547,14 @@ def admin_groups_keyboard():
     markup = InlineKeyboardMarkup(row_width=1)
     if "groups" in data and data["groups"]:
         for chat_id, group in list(data["groups"].items())[:10]:
+            # Исправление: безопасное получение title
             title = group.get("title", "Без названия")
+            # Экранируем HTML-символы в названии
+            safe_title = html.escape(title)
             vip = "👑" if group.get("owner_vip") else ""
+            # Используем chat_id как строку для callback_data
             markup.add(
-                InlineKeyboardButton(f"{vip} {title}", callback_data=f"admin_group_{chat_id}")
+                InlineKeyboardButton(f"{vip} {safe_title}", callback_data=f"admin_group_{chat_id}")
             )
     markup.add(
         InlineKeyboardButton("➕ Добавить группу", callback_data="admin_add_group"),
@@ -1682,7 +1778,7 @@ def receive_backup_file(message):
     else:
         bot.send_message(user_id, "❌ Отправь файл, а не текст")
 
-# ========== КОМАНДА /DINFO (п.7) ==========
+# ========== КОМАНДА /DINFO ==========
 @bot.message_handler(commands=['dinfo'])
 def dinfo_command(message):
     user_id = message.from_user.id
@@ -1982,25 +2078,23 @@ def receive_post_link(message):
     state = user_post_states.get(user_id_str, {})
     link = message.text.strip() if message.text else ""
     
-    # Исправление №1: проверяем, что ссылка валидная или это дефис
-    if link != "-" and link:
-        # Простая проверка на URL
-        if not (link.startswith("http://") or link.startswith("https://") or link.startswith("t.me/")):
-            # Если прислали что-то другое, просто игнорируем и не создаем кнопку
-            link = ""
-            bot.send_message(
-                user_id,
-                "⚠️ Неверный формат ссылки. Кнопка создана не будет.\n\n"
-                "Продолжаем...",
-                parse_mode="HTML"
-            )
-        else:
-            link = link if link.startswith("http") else f"https://{link}"
+    # Исправление №5: обработка @username
+    processed_link = process_link_url(link)
     
-    if link == "-":
-        link = ""
+    if processed_link:
+        state["link_url"] = processed_link
+    elif link == "-" or not link:
+        state["link_url"] = ""
+    else:
+        # Если ссылка не прошла проверку, не создаем кнопку
+        state["link_url"] = ""
+        bot.send_message(
+            user_id,
+            "⚠️ Неверный формат ссылки. Кнопка создана не будет.\n\n"
+            "Продолжаем...",
+            parse_mode="HTML"
+        )
     
-    state["link_url"] = link
     state["step"] = "link_text"
     user_post_states[user_id_str] = state
     
@@ -2187,16 +2281,6 @@ def finalize_post(message, state):
         )
         
         print_log("POST", f"Новый пост от {get_user_display_name(user_id, hide_username=False)}")
-        
-        # Уведомления админов отключены (п.6)
-        # for admin_id in data.get("admins", []):
-        #     if admin_id != str(user_id):
-        #         admin = get_user(admin_id)
-        #         if admin and admin.get("admin_notifications", True):
-        #             try:
-        #                 ...
-        #             except:
-        #                 pass
 
 @bot.message_handler(commands=['grouppost'])
 def cmd_group_post(message):
@@ -2307,7 +2391,7 @@ def receive_group_post_text(message):
         "time": format_msk_time(datetime.now()),
         "type": "group",
         "media": media,
-        "link_url": "",  # Для групповых постов пока без ссылок
+        "link_url": "",
         "link_text": ""
     }
     
@@ -2462,7 +2546,6 @@ def cmd_top(message):
     
     bot.send_message(user_id, text, parse_mode="HTML")
 
-# Исправление №10: убраны админские команды из общего help
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     user_id = message.from_user.id
@@ -3207,6 +3290,10 @@ def receive_reject_reason(message, post_data, post_index):
         if next_post.get("link_url") and next_post.get("link_text"):
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton(next_post["link_text"], url=next_post["link_url"]))
+            for btn in admin_post_actions_keyboard(next_post['id']).keyboard[0]:
+                markup.add(btn)
+        else:
+            markup = admin_post_actions_keyboard(next_post['id'])
         
         if next_post.get("media"):
             bot.send_photo(
@@ -3214,7 +3301,7 @@ def receive_reject_reason(message, post_data, post_index):
                 next_post["media"],
                 caption=text,
                 parse_mode="HTML",
-                reply_markup=admin_post_actions_keyboard(next_post['id']),
+                reply_markup=markup,
                 disable_notification=True
             )
         else:
@@ -3222,7 +3309,7 @@ def receive_reject_reason(message, post_data, post_index):
                 user_id,
                 text,
                 parse_mode="HTML",
-                reply_markup=admin_post_actions_keyboard(next_post['id'])
+                reply_markup=markup
             )
         
         if next_post.get("vip_media") and next_post.get("vip_media_type"):
@@ -3270,7 +3357,6 @@ def receive_interpol_post(message):
     elif message.content_type == 'sticker':
         vip_media = message.sticker.file_id
         vip_media_type = 'sticker'
-        # Запрашиваем текст отдельно
         bot.send_message(
             user_id,
             "🎬 Стикер принят! Теперь отправь текст поста (или '-' если без текста):",
@@ -3362,6 +3448,9 @@ def receive_interpol_link(message, media, post_text, vip_media, vip_media_type):
     if link == "-":
         link = ""
     
+    # Обработка ссылки
+    processed_link = process_link_url(link)
+    
     bot.send_message(
         user_id,
         f"✅ Ссылка принята!\n\n"
@@ -3370,7 +3459,7 @@ def receive_interpol_link(message, media, post_text, vip_media, vip_media_type):
         f"Если кнопка не нужна, отправь '-' (дефис).",
         parse_mode="HTML"
     )
-    bot.register_next_step_handler_by_chat_id(user_id, receive_interpol_button, media, post_text, link, vip_media, vip_media_type)
+    bot.register_next_step_handler_by_chat_id(user_id, receive_interpol_button, media, post_text, processed_link, vip_media, vip_media_type)
 
 def receive_interpol_button(message, media, post_text, link_url, vip_media, vip_media_type):
     user_id = message.from_user.id
@@ -3414,14 +3503,21 @@ def receive_interpol_button(message, media, post_text, link_url, vip_media, vip_
         "vip_media_type": vip_media_type
     }
     
-    sent = send_post_to_users(post, user_id, force_all=True, media=media)
+    # Рассылка в личку
+    sent_dm = send_post_to_users(post, user_id, force_all=True, media=media)
+    
+    # Рассылка в группы (п.7)
+    sent_groups = send_interpol_to_groups(post)
+    
     bot.send_message(
         user_id,
-        f"📢 Интерпол-рассылка выполнена!\n\n✅ Доставлено: {sent} пользователям",
+        f"📢 Интерпол-рассылка выполнена!\n\n"
+        f"✅ Доставлено в личку: {sent_dm} пользователям\n"
+        f"✅ Доставлено в группы: {sent_groups} группам",
         parse_mode="HTML",
         reply_markup=admin_main_keyboard()
     )
-    log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent}")
+    log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent_dm} в личку, {sent_groups} в группы")
 
 def receive_hotline_message(message):
     user_id = message.from_user.id
@@ -3453,7 +3549,6 @@ def receive_hotline_message(message):
     user["last_hotline"] = format_msk_time(datetime.now())
     save_data(data)
     
-    # Сохраняем в список горячей линии (п.8)
     hotline_entry = {
         "id": len(data.get("hotline_messages", [])) + 1,
         "from_id": user_id,
@@ -3466,13 +3561,6 @@ def receive_hotline_message(message):
         data["hotline_messages"] = []
     data["hotline_messages"].append(hotline_entry)
     save_data(data)
-    
-    # Отключаем уведомления админам (п.6)
-    # for admin_id in data.get("admins", []):
-    #     try:
-    #         bot.send_message(int(admin_id), text, parse_mode="HTML")
-    #     except:
-    #         pass
     
     bot.send_message(
         user_id,
@@ -3563,7 +3651,7 @@ def admin_search_user(message):
     )
     log_admin_action(user_id, "Искал пользователя", get_user_display_name(target_id, hide_username=False))
 
-# Исправление №4: функция просмотра всех юзеров
+# Исправление №4: функция просмотра всех юзеров (теперь отправляет новое сообщение)
 def admin_all_users(message):
     user_id = message.from_user.id
     
@@ -3596,7 +3684,8 @@ def admin_all_users(message):
     
     text = f"📋 СПИСОК ПОЛЬЗОВАТЕЛЕЙ\nВсего: {len(users_list)}\nСтраница {page + 1}/{total_pages}\n\n"
     for i, (uid, name) in enumerate(page_users, 1):
-        text += f"{i}. {name} (ID: {uid})\n"
+        safe_name = html.escape(name)
+        text += f"{i}. {safe_name} (ID: {uid})\n"
     
     markup = InlineKeyboardMarkup(row_width=2)
     if total_pages > 1:
@@ -3823,7 +3912,7 @@ def callback_handler(call):
     
     data_cmd = call.data
     
-    # НОВОЕ: обработка клика по ссылке
+    # Обработка клика по ссылке
     if data_cmd.startswith("link_click_"):
         post_id = data_cmd.split("_")[2]
         post_info = data["post_contents"].get(str(post_id), {})
@@ -3917,7 +4006,7 @@ def callback_handler(call):
         update_post_reactions_buttons(post_id, call.message.chat.id, call.message.message_id)
         return
     
-    # Исправление №15: жалоба только один раз
+    # Жалоба только один раз
     elif data_cmd.startswith("complaint_"):
         post_id = data_cmd.split("_")[1]
         post_info = data["post_contents"].get(str(post_id), {})
@@ -3930,12 +4019,10 @@ def callback_handler(call):
         
         reactions = data["post_reactions"][str(post_id)]
         
-        # Проверяем, не жаловался ли уже пользователь
         if user_id_str not in reactions["complaints"]:
             reactions["complaints"].append(user_id_str)
             bot.answer_callback_query(call.id, "⚠️ Жалоба отправлена")
             
-            # Сохраняем жалобу в отдельный список (п.8)
             complaint_entry = {
                 "id": len(data.get("complaints", [])) + 1,
                 "post_id": post_id,
@@ -3951,15 +4038,6 @@ def callback_handler(call):
                 data["complaints"] = []
             data["complaints"].append(complaint_entry)
             save_data(data)
-            
-            # Отключаем уведомления админам (п.6)
-            # for admin_id in data.get("admins", []):
-            #     if admin_id != user_id_str:
-            #         try:
-            #             text = f"""..."""
-            #             bot.send_message(int(admin_id), text, parse_mode="HTML")
-            #         except:
-            #             pass
         else:
             bot.answer_callback_query(call.id, "⚠️ Вы уже жаловались на этот пост")
         
@@ -3976,7 +4054,6 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"🗑 Удалено у {deleted}")
         log_admin_action(user_id, "Удалил пост (кнопка)", f"ID {post_id}, у {deleted}")
         
-        # Удаляем сообщение у админа, если это возможно
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except:
@@ -4026,7 +4103,7 @@ def callback_handler(call):
         )
         log_admin_action(user_id, "Выдал VIP всем с бонусом", f"{count} пользователей, бонус: {bonus_name}")
     
-    # НОВЫЕ РАЗДЕЛЫ: ЖАЛОБЫ И ГОРЯЧАЯ ЛИНИЯ (п.8)
+    # ЖАЛОБЫ И ГОРЯЧАЯ ЛИНИЯ
     elif data_cmd == "admin_complaints_list":
         if not is_admin(user_id):
             return
@@ -4056,41 +4133,49 @@ def callback_handler(call):
         if not is_admin(user_id):
             return
         
-        idx = int(data_cmd.split("_")[2])
-        complaints = data.get("complaints", [])
-        if idx >= len(complaints):
-            bot.answer_callback_query(call.id, "Жалоба не найдена")
-            return
-        
-        comp = complaints[idx]
-        text = f"""
+        parts = data_cmd.split("_")
+        # Проверяем, что это не resolve и не delpost
+        if len(parts) == 3 and parts[2].isdigit():
+            idx = int(parts[2])
+            complaints = data.get("complaints", [])
+            if idx >= len(complaints):
+                bot.answer_callback_query(call.id, "Жалоба не найдена")
+                return
+            
+            comp = complaints[idx]
+            # Экранируем HTML
+            safe_author_name = html.escape(comp['author_name'])
+            safe_from_name = html.escape(comp['from_name'])
+            safe_post_text = html.escape(comp['post_text'])
+            
+            text = f"""
 ⚠️ ЖАЛОБА #{idx+1}
 
 📝 Пост ID: {comp['post_id']}
-👤 Автор поста: {comp['author_name']} (ID: {comp['author_id']})
-👤 Пожаловался: {comp['from_name']} (ID: {comp['from_id']})
+👤 Автор поста: {safe_author_name} (ID: {comp['author_id']})
+👤 Пожаловался: {safe_from_name} (ID: {comp['from_id']})
 🕐 Время: {comp['time']}
 
 📄 Текст поста:
-{comp['post_text']}
+{safe_post_text}
 
 Статус: {'✅ Решена' if comp.get('resolved') else '🕐 Ожидает'}
-        """
-        markup = InlineKeyboardMarkup(row_width=2)
-        if not comp.get('resolved'):
-            markup.add(
-                InlineKeyboardButton("🗑 Удалить пост", callback_data=f"admin_complaint_delpost_{comp['post_id']}_{idx}"),
-                InlineKeyboardButton("✅ Отметить решённой", callback_data=f"admin_complaint_resolve_{idx}")
+            """
+            markup = InlineKeyboardMarkup(row_width=2)
+            if not comp.get('resolved'):
+                markup.add(
+                    InlineKeyboardButton("🗑 Удалить пост", callback_data=f"admin_complaint_delpost_{comp['post_id']}_{idx}"),
+                    InlineKeyboardButton("✅ Отметить решённой", callback_data=f"admin_complaint_resolve_{idx}")
+                )
+            markup.add(InlineKeyboardButton("◀️ Назад", callback_data="admin_complaints_list"))
+            
+            bot.edit_message_text(
+                text,
+                user_id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=markup
             )
-        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="admin_complaints_list"))
-        
-        bot.edit_message_text(
-            text,
-            user_id,
-            call.message.message_id,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
     
     elif data_cmd.startswith("admin_complaint_delpost_"):
         if not is_admin(user_id):
@@ -4102,7 +4187,6 @@ def callback_handler(call):
         
         deleted = delete_post_globally(post_id)
         
-        # Отмечаем жалобу как решённую
         complaints = data.get("complaints", [])
         if idx < len(complaints):
             complaints[idx]["resolved"] = True
@@ -4111,7 +4195,6 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"🗑 Пост удалён у {deleted} пользователей")
         log_admin_action(user_id, "Удалил пост из жалобы", f"ID {post_id}, у {deleted}")
         
-        # Обновляем список жалоб
         bot.edit_message_text(
             "⚠️ ЖАЛОБЫ\n\nЖалоба обработана. Пост удалён.",
             user_id,
@@ -4176,14 +4259,17 @@ def callback_handler(call):
             return
         
         msg = hotline[idx]
+        safe_message = html.escape(msg['message'])
+        safe_from_name = html.escape(msg['from_name'])
+        
         text = f"""
 📞 СООБЩЕНИЕ ГОРЯЧЕЙ ЛИНИИ #{idx+1}
 
-👤 От: {msg['from_name']} (ID: {msg['from_id']})
+👤 От: {safe_from_name} (ID: {msg['from_id']})
 🕐 Время: {msg['time']}
 
 📄 Текст:
-{msg['message']}
+{safe_message}
 
 Статус: {'✅ Отвечено' if msg.get('answered') else '🕐 Ожидает ответа'}
         """
@@ -4317,7 +4403,8 @@ def callback_handler(call):
         
         text = f"📋 СПИСОК ПОЛЬЗОВАТЕЛЕЙ\nВсего: {len(users_list)}\nСтраница {page + 1}/{total_pages}\n\n"
         for i, (uid, name) in enumerate(page_users, start + 1):
-            text += f"{i}. {name} (ID: {uid})\n"
+            safe_name = html.escape(name)
+            text += f"{i}. {safe_name} (ID: {uid})\n"
         
         markup = InlineKeyboardMarkup(row_width=2)
         if page > 0:
@@ -4364,7 +4451,8 @@ def callback_handler(call):
         
         text = f"📋 СПИСОК ПОЛЬЗОВАТЕЛЕЙ\nВсего: {len(users_list)}\nСтраница 1/{total_pages}\n\n"
         for i, (uid, name) in enumerate(page_users, 1):
-            text += f"{i}. {name} (ID: {uid})\n"
+            safe_name = html.escape(name)
+            text += f"{i}. {safe_name} (ID: {uid})\n"
         
         markup = InlineKeyboardMarkup(row_width=2)
         if total_pages > 1:
@@ -4533,7 +4621,6 @@ def callback_handler(call):
             return
         
         chat_id = data_cmd.split("_")[2]
-        # Исправление №11: проверяем существование группы
         if chat_id not in data.get("groups", {}):
             bot.answer_callback_query(call.id, "Группа не найдена")
             bot.edit_message_text(
@@ -4548,14 +4635,17 @@ def callback_handler(call):
         
         group = data["groups"][chat_id]
         added_by_name = group.get("added_by_name", "Неизвестно")
+        safe_title = html.escape(group.get('title', 'Без названия'))
+        safe_added_by_name = html.escape(added_by_name)
+        
         text = f"""
 👥 Информация о группе
 
-🏷 Название: {group.get('title', 'Без названия')}
+🏷 Название: {safe_title}
 🆔 ID: {chat_id}
 👑 Владелец VIP: {'Да' if group.get('owner_vip') else 'Нет'}
 📅 Добавлена: {group.get('added_date', 'Неизвестно')}
-👤 Добавил: {added_by_name}
+👤 Добавил: {safe_added_by_name}
 📝 Всего постов: {group.get('total_posts', 0)}
         """
         bot.edit_message_text(
@@ -4642,7 +4732,8 @@ def callback_handler(call):
                 author = get_user_display_name(post["user_id"], hide_username=False)
                 has_media = "📷" if post.get("media") else ""
                 vip_media = "🎬" if post.get("vip_media") else ""
-                text = f"📝 Пост от {author}\n\n{has_media}{vip_media} {post['text']}"
+                safe_text = html.escape(post['text'])
+                text = f"📝 Пост от {author}\n\n{has_media}{vip_media} {safe_text}"
                 
                 markup = None
                 if post.get("link_url") and post.get("link_text"):
@@ -4727,7 +4818,8 @@ def callback_handler(call):
             author = get_user_display_name(next_post["user_id"], hide_username=False)
             has_media = "📷" if next_post.get("media") else ""
             vip_media = "🎬" if next_post.get("vip_media") else ""
-            text = f"✅ Пост одобрен. Доставлено: {sent}\n\n📝 Следующий пост от {author}\n\n{has_media}{vip_media} {next_post['text']}"
+            safe_text = html.escape(next_post['text'])
+            text = f"✅ Пост одобрен. Доставлено: {sent}\n\n📝 Следующий пост от {author}\n\n{has_media}{vip_media} {safe_text}"
             
             markup = None
             if next_post.get("link_url") and next_post.get("link_text"):
@@ -4841,16 +4933,19 @@ def callback_handler(call):
         post_id = data_cmd.split("_")[1]
         for i, p in enumerate(data["posts"]):
             if str(p["id"]) == post_id:
-                sent = send_post_to_users(p, user_id, force_all=True, media=p.get("media"))
+                sent_dm = send_post_to_users(p, user_id, force_all=True, media=p.get("media"))
+                sent_groups = send_interpol_to_groups(p)
                 data["posts"].pop(i)
                 save_data(data)
                 bot.edit_message_text(
-                    f"📢 Интерпол-рассылка выполнена\n\n✅ Доставлено: {sent} пользователям",
+                    f"📢 Интерпол-рассылка выполнена\n\n"
+                    f"✅ Доставлено в личку: {sent_dm} пользователям\n"
+                    f"✅ Доставлено в группы: {sent_groups} группам",
                     user_id,
                     call.message.message_id,
                     parse_mode="HTML"
                 )
-                log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent}")
+                log_admin_action(user_id, "Интерпол-рассылка", f"доставлено {sent_dm} в личку, {sent_groups} в группы")
                 break
     
     elif data_cmd == "admin_interpol":
@@ -4858,7 +4953,7 @@ def callback_handler(call):
             return
         
         bot.edit_message_text(
-            "📢 Интерпол-рассылка\n\nОтправь текст поста (или текст+картинку, стикер, GIF) для рассылки ВСЕМ пользователям:\n\n"
+            "📢 Интерпол-рассылка\n\nОтправь текст поста (или текст+картинку, стикер, GIF) для рассылки ВСЕМ пользователям и во все группы:\n\n"
             "Или отправь 'отмена' для отмены.",
             user_id,
             call.message.message_id,
@@ -5037,7 +5132,8 @@ def callback_handler(call):
         
         text = "🗑 НЕАКТИВНЫЕ ПОЛЬЗОВАТЕЛИ (удалены из топа)\n\n"
         for entry in inactive[-10:]:
-            text += f"👤 {entry['name']} (ID: {entry['id']})\n"
+            safe_name = html.escape(entry['name'])
+            text += f"👤 {safe_name} (ID: {entry['id']})\n"
             text += f"   🕐 Деактивирован: {entry['deactivated_at']}\n"
             text += f"   📝 Причина: {entry['reason']}\n\n"
         
@@ -5304,24 +5400,25 @@ def callback_handler(call):
             reply_markup=fun_keyboard()
         )
     
-    # Исправление №9: автоочистка сообщений при случайном посте
     elif data_cmd == "random_post":
         random_post = get_random_post()
         if not random_post:
             bot.answer_callback_query(call.id, "😢 Пока нет постов для просмотра")
             return
         
+        safe_text = html.escape(random_post['text'])
+        safe_author = html.escape(random_post['author_name'])
+        
         text = f"""
 📖 СЛУЧАЙНЫЙ ПОСТ
 
-👤 Автор: {random_post['author_name']}
+👤 Автор: {safe_author}
 📅 Дата: {random_post['date']}
 👍 Лайков: {random_post['likes']}
 
 📝 Текст:
-{random_post['text']}
+{safe_text}
         """
-        # Удаляем предыдущее сообщение, если оно было от бота
         try:
             bot.delete_message(user_id, call.message.message_id)
         except:
@@ -5763,10 +5860,12 @@ def callback_handler(call):
             return
         
         clicks = post_data.get("link_clicks", 0)
+        safe_text = html.escape(post_data['text'])
+        
         text = f"""
 📝 Пост от {post_data.get('date', '?')[:10]}
 
-{post_data['text']}
+{safe_text}
 
 👍 Лайков: {post_data.get('likes', 0)}
 👎 Дизлайков: {post_data.get('dislikes', 0)}
@@ -5891,7 +5990,7 @@ def callback_handler(call):
 📌 Тип: Некоммерческая рассылка
 🚫 Важно: Коммерческие проекты не рекламировать!
 
-📊 Версия бота: 5.3
+📊 Версия бота: 5.4
         """
         bot.send_message(
             user_id,
@@ -5925,7 +6024,6 @@ def send_hotline_reply(message, target_user_id, hotline_idx):
             f"✅ Ответ отправлен пользователю"
         )
         
-        # Отмечаем как отвеченное
         hotline = data.get("hotline_messages", [])
         if hotline_idx < len(hotline):
             hotline[hotline_idx]["answered"] = True
@@ -5944,6 +6042,7 @@ def background_tasks():
     last_cleanup = None
     last_backup = None
     last_maintenance_check = None
+    last_admin_summary = None
     
     while True:
         time.sleep(60)
@@ -5972,6 +6071,11 @@ def background_tasks():
         if not last_backup or now.hour != last_backup.hour:
             send_auto_backup()
             last_backup = now
+        
+        # Уведомления админам раз в 2 часа (п.3)
+        if not last_admin_summary or (now - last_admin_summary).total_seconds() >= 7200:  # 2 часа
+            send_admin_summary()
+            last_admin_summary = now
         
         if "first_post_quests" in data:
             for uid in list(data["first_post_quests"].keys()):
@@ -6027,7 +6131,7 @@ if __name__ == "__main__":
     
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("="*50)
-    print("     LowHigh v5.3")
+    print("     LowHigh v5.4")
     print("="*50)
     print(f"{Colors.END}")
     
